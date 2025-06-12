@@ -62,11 +62,6 @@
 #include <inttypes.h>
 #include "I2C.h"
 
-#include "../../include/TraceLevel.h"
-#undef CLASS_TRACE_LEVEL
-#define CLASS_TRACE_LEVEL DEBUG_I2C
-#include "../Utilities/TraceHelper.h"
-
 uint8_t I2C::returnStatus = 0;
 uint8_t I2C::nack = 0;
 uint8_t I2C::data[MAX_BUFFER_SIZE];
@@ -75,7 +70,7 @@ uint8_t I2C::bufferIndex = 0;
 uint8_t I2C::totalBytes = 0;
 SimpleTimer<uint8_t> I2C::timeoutTimer(0);
 
-I2C::I2C() : Traceable(F("I2C"), static_cast<Level>(DEBUG_I2C))
+I2C::I2C()
 {
 }
 
@@ -232,9 +227,7 @@ void I2C::scan()
     timeoutTimer.setInterval(80);
     uint8_t totalDevicesFound = 0;
 
-    TRACE_INFO()
-        << F("Scanning for devices...please wait")
-        << endl;
+    Serial.println(F("Scanning for devices...please wait"));
 
     for (uint8_t s = 0; s <= 0x7F; s++)
     {
@@ -248,32 +241,29 @@ void I2C::scan()
         {
             if (returnStatus == 1)
             {
-                TRACE_ERROR()
-                    << F("There is a problem with the bus, could not complete scan")
-                    << endl;
-
-                timeoutTimer.setInterval(tempInterval);
-                return;
+                Serial.print(F("No response at address 0x"));
+                Serial.println(s, HEX);
+            }
+            else
+            {
+                Serial.print(F("Error at address 0x"));
+                Serial.print(s, HEX);
+                Serial.print(F(": "));
+                Serial.println(returnStatus);
             }
         }
         else
         {
-            TRACE_INFO()
-                << F("Found device at address - ")
-                << F(" 0x")
-                << HEX
-                << s
-                << endl;
+            Serial.print(F("Device found at address 0x"));
+            Serial.println(s, HEX);
             totalDevicesFound++;
         }
         _stop();
     }
-    if (!totalDevicesFound)
-    {
-        TRACE_INFO()
-            << F("No devices found")
-            << endl;
-    }
+
+    Serial.print(F("Scan complete. Found "));
+    Serial.print(totalDevicesFound);
+    Serial.println(F(" device(s)."));
 
     timeoutTimer.setInterval(tempInterval);
 }

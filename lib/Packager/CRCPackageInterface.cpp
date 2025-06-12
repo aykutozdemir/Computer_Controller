@@ -32,11 +32,6 @@
 #include "PipedStream.h"
 #include "Utilities.h"
 
-#include "../../include/TraceLevel.h"
-#undef CLASS_TRACE_LEVEL
-#define CLASS_TRACE_LEVEL DEBUG_CRC_PACKAGE
-#include "../Utilities/TraceHelper.h"
-
 // Flash String Constants
 // Error message prefixes stored in flash memory to minimize RAM usage
 const char CRCPackageInterface::PREFIX_I_STR[] PROGMEM = "I:"; ///< Incoming channel errors
@@ -57,22 +52,8 @@ const char CRCPackageInterface::INVALID_TYPE_STR[] PROGMEM = "Invalid type";    
 const char CRCPackageInterface::INVALID_LENGTH_STR[] PROGMEM = "Invalid length";         ///< Invalid payload length
 const char CRCPackageInterface::RESET_NUM_STR[] PROGMEM = "Reset number";                ///< Sequence number reset
 
-/**
- * @brief Constructor implementation
- *
- * @details Initializes protocol state:
- * - Packet counters (out: 1, in: 0)
- * - State machines (READ_DATA, WAIT_FOR_START_BYTE)
- * - Timers (data, ACK/NACK, reset)
- * - Message queues (cleared)
- * - Packet buffers (zeroed)
- *
- * Note: Starting packet number is 1 (not 0) for outgoing packets
- * to distinguish from reset packets.
- */
 CRCPackageInterface::CRCPackageInterface(PipedStreamPair &pipedStreamPair, const uint16_t encodedBufferSize)
     : PackageInterface(pipedStreamPair, encodedBufferSize),
-      Traceable(F("CRCPackageInterface"), static_cast<Level>(DEBUG_CRC_PACKAGE)),
       m_outgoingTimer(OUTGOING_DATA_READ_TIMEOUT),
       m_incomingTimer(INCOMING_DATA_WAIT_TIMEOUT),
       m_resetDetectionTimer(RESET_DETECTION_TIMEOUT),
@@ -95,28 +76,6 @@ CRCPackageInterface::CRCPackageInterface(PipedStreamPair &pipedStreamPair, const
     m_incomingFlags.m_currentState = IncomingState::WAIT_FOR_START_BYTE;
 }
 
-/**
- * @brief Main protocol processing loop
- *
- * @details Performs one iteration of protocol processing:
- *
- * 1. Connection Monitoring:
- *    - Checks reset detection timer
- *    - Resets protocol if timeout
- *
- * 2. Outgoing Channel:
- *    - Processes state machine
- *    - Limits state transitions
- *    - Reports excessive transitions
- *
- * 3. Incoming Channel:
- *    - Processes state machine
- *    - Limits state transitions
- *    - Reports excessive transitions
- *
- * Note: State machine transitions are limited to prevent
- * infinite loops in case of corruption.
- */
 void CRCPackageInterface::loop()
 {
     // Check for connection timeout
@@ -142,10 +101,8 @@ void CRCPackageInterface::loop()
         // Report if limit reached
         if (outgoingStateChanges == MAX_REPLAY_COUNT)
         {
-            TRACE_WARN()
-                << PGMT(PREFIX_O_STR)
-                << PGMT(MAX_STATE_CHG_STR)
-                << endl;
+            Serial.print(F("O: Max state change"));
+            Serial.println();
         }
     }
 
@@ -165,27 +122,12 @@ void CRCPackageInterface::loop()
         // Report if limit reached
         if (incomingStateChanges == MAX_REPLAY_COUNT)
         {
-            TRACE_WARN()
-                << PGMT(PREFIX_I_STR)
-                << PGMT(MAX_STATE_CHG_STR)
-                << endl;
+            Serial.print(F("I: Max state change"));
+            Serial.println();
         }
     }
 }
 
-/**
- * @brief Initiates connection reset
- *
- * @details Performs connection reset sequence:
- * 1. Checks buffer capacity
- * 2. Sends RESET packet (type: 3, number: 0)
- * 3. Resets local protocol state
- *
- * Used to recover from:
- * - Connection loss
- * - Protocol desynchronization
- * - Peer reset/restart
- */
 void CRCPackageInterface::sendResetPacket()
 {
     PipedStream &encodedStream = getInternalEncodedStream();
@@ -193,10 +135,8 @@ void CRCPackageInterface::sendResetPacket()
     // Verify buffer capacity
     if (PACKAGE_LENGTH > encodedStream.availableForWrite())
     {
-        TRACE_WARN()
-            << PGMT(PREFIX_O_STR)
-            << PGMT(BUFFER_FULL_STR)
-            << endl;
+        Serial.print(F("O: Buffer full"));
+        Serial.println();
         return;
     }
 
@@ -210,18 +150,6 @@ void CRCPackageInterface::sendResetPacket()
     resetPacketNumbering();
 }
 
-/**
- * @brief Resets protocol state
- *
- * @details Performs complete protocol reset:
- * 1. Resets packet counters (out: 1, in: 0)
- * 2. Clears message queues
- * 3. Resets state machines
- * 4. Reports reset event
- *
- * Note: Only resets if outgoing number isn't already 1
- * to avoid unnecessary operations.
- */
 void CRCPackageInterface::resetPacketNumbering()
 {
     if (m_outgoingPacketNumber == 1)
@@ -238,10 +166,8 @@ void CRCPackageInterface::resetPacketNumbering()
     resetOutgoingState();
     resetIncomingState();
 
-    TRACE_INFO()
-        << PGMT(PREFIX_STR)
-        << PGMT(RESET_NUM_STR)
-        << endl;
+    Serial.print(F("X: Reset number"));
+    Serial.println();
 }
 
 /**
@@ -538,10 +464,8 @@ bool CRCPackageInterface::processPackage()
             // Check buffer space for response
             if (PACKAGE_LENGTH > encodedStream.availableForWrite())
             {
-                TRACE_WARN()
-                    << PGMT(PREFIX_I_STR)
-                    << PGMT(BUFFER_FULL_STR)
-                    << endl;
+                Serial.print(F("I: Buffer full"));
+                Serial.println();
                 return false;
             }
 
@@ -553,10 +477,8 @@ bool CRCPackageInterface::processPackage()
                 // Check buffer space for payload
                 if (safeLength > plainStream.availableForWrite())
                 {
-                    TRACE_WARN()
-                        << PGMT(PREFIX_I_STR)
-                        << PGMT(BUFFER_FULL_STR)
-                        << endl;
+                    Serial.print(F("I: Buffer full"));
+                    Serial.println();
                     return false;
                 }
 
@@ -574,10 +496,8 @@ bool CRCPackageInterface::processPackage()
         else if (m_incomingPackage.header.type == RESET_TYPE)
         {
             // Handle reset request
-            TRACE_INFO()
-                << PGMT(PREFIX_I_STR)
-                << PGMT(RESET_NUM_STR)
-                << endl;
+            Serial.print(F("I: Reset number"));
+            Serial.println();
 
             resetPacketNumbering();
 
@@ -604,10 +524,8 @@ bool CRCPackageInterface::processPackage()
             if (m_incomingPackage.header.length > 0)
             {
                 nackReason = static_cast<NackReason>(m_incomingPackage.data[0]);
-                TRACE_ERROR()
-                    << PGMT(PREFIX_O_STR)
-                    << toString(nackReason)
-                    << endl;
+                Serial.print(F("O: NACK"));
+                Serial.println();
             }
 
             // Queue NACK
@@ -621,22 +539,16 @@ bool CRCPackageInterface::processPackage()
     else
     {
         // Report validation failure
-        TRACE_ERROR()
-            << PGMT(PREFIX_I_STR)
-            << toString(validationResult)
-            << endl;
+        Serial.print(F("I: "));
+        Serial.println(toString(validationResult));
 
         // Send NACK if DATA packet
         if (m_incomingPackage.header.type == DATA_TYPE)
         {
             if (PACKAGE_LENGTH > encodedStream.availableForWrite())
             {
-                TRACE_WARN()
-                    << PGMT(PREFIX_I_STR)
-                    << PGMT(BUFFER_FULL_STR)
-                    << endl;
-
-                return false;
+                Serial.print(F("I: Buffer full"));
+                Serial.println();
             }
 
             const uint8_t packetNumber = m_incomingPackage.header.packetNumber;
@@ -694,10 +606,8 @@ bool CRCPackageInterface::handleOutgoingState()
             {
                 m_outgoingPacketNumber = 1;
                 m_lastIncomingPacketNumber = 0;
-                TRACE_INFO()
-                    << PGMT(PREFIX_O_STR)
-                    << PGMT(RESET_NUM_STR)
-                    << endl;
+                Serial.print(F("O: Reset number"));
+                Serial.println();
             }
             resetOutgoingState();
             return true;
@@ -708,10 +618,8 @@ bool CRCPackageInterface::handleOutgoingState()
         {
             // Process NACK - retry if attempts remain
             m_outgoingFlags.m_retryCount++;
-            TRACE_ERROR()
-                << PGMT(PREFIX_O_STR)
-                << PGMT(NACK_STR)
-                << endl;
+            Serial.print(F("O: NACK"));
+            Serial.println();
             m_outgoingFlags.m_currentState = OutgoingState::SEND_PACKAGE;
             return true;
         }
@@ -745,10 +653,8 @@ bool CRCPackageInterface::handleOutgoingState()
         // Verify buffer space
         if (PACKAGE_LENGTH > encodedStream.availableForWrite())
         {
-            TRACE_WARN()
-                << PGMT(PREFIX_O_STR)
-                << PGMT(BUFFER_FULL_STR)
-                << endl;
+            Serial.print(F("O: Buffer full"));
+            Serial.println();
             return false;
         }
 
@@ -770,20 +676,16 @@ bool CRCPackageInterface::handleOutgoingState()
             if (m_outgoingFlags.m_retryCount >= MAX_RETRY_COUNT)
             {
                 // Max retries reached - reset state
-                TRACE_ERROR()
-                    << PGMT(PREFIX_O_STR)
-                    << PGMT(MAX_RETRY_STR)
-                    << endl;
+                Serial.print(F("O: Max retry"));
+                Serial.println();
                 resetOutgoingState();
             }
             else
             {
                 // Retry transmission
                 m_outgoingFlags.m_retryCount++;
-                TRACE_ERROR()
-                    << PGMT(PREFIX_O_STR)
-                    << PGMT(RETRY_STR)
-                    << endl;
+                Serial.print(F("O: Retry"));
+                Serial.println();
                 m_outgoingFlags.m_currentState = OutgoingState::SEND_PACKAGE;
             }
             return true;
@@ -792,10 +694,8 @@ bool CRCPackageInterface::handleOutgoingState()
 
     default:
         // Invalid state - reset
-        TRACE_ERROR()
-            << PGMT(PREFIX_O_STR)
-            << PGMT(UNKNOWN_STATE_STR)
-            << endl;
+        Serial.print(F("O: Unknown state"));
+        Serial.println();
         resetOutgoingState();
         return true;
     }
@@ -875,10 +775,8 @@ bool CRCPackageInterface::handleIncomingState()
 
     default:
         // Invalid state - reset
-        TRACE_ERROR()
-            << PGMT(PREFIX_I_STR)
-            << PGMT(UNKNOWN_STATE_STR)
-            << endl;
+        Serial.print(F("I: Unknown state"));
+        Serial.println();
         resetIncomingState();
         return true;
     }

@@ -4,7 +4,6 @@
 #include "PackageInterface.h"
 #include "SimpleTimer.h"
 #include "FastCircularQueue.h"
-#include "Traceable.h"
 /**
  * @file CRCPackageInterface.h
  * @brief Reliable packet-based communication protocol with CRC-16 validation
@@ -53,7 +52,7 @@
  * @note Designed for single-threaded environments with interrupt safety
  * @note All packet operations are non-blocking
  */
-class CRCPackageInterface : public PackageInterface, public Traceable
+class CRCPackageInterface : public PackageInterface
 {
 public:
     /**

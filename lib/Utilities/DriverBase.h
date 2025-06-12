@@ -14,20 +14,19 @@
 
 #include <Arduino.h>
 #include "Utilities.h"
-#include "Traceable.h"
 
 /**
  * @brief Base class for all drivers
  *
  * This class provides common functionality for all drivers, reducing code duplication and flash usage.
  */
-class DriverBase : public Traceable
+class DriverBase
 {
 public:
     /**
      * @brief Default constructor
      */
-    DriverBase(const __FlashStringHelper *const functionName, const Level compileTimeLevel) : Traceable(functionName, compileTimeLevel) {}
+    DriverBase() {}
 
     /**
      * @brief Destructor

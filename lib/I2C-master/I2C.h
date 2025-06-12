@@ -75,7 +75,6 @@
 #endif
 
 #include <inttypes.h>
-#include "Traceable.h"
 #include "../SimpleTimer/SimpleTimer.h"
 
 /**
@@ -111,7 +110,7 @@
  * conditions, timeouts to detect and recover from bus lockups, and utility functions
  * for common I2C operations.
  */
-class I2C : public Traceable
+class I2C
 {
 public:
   /**

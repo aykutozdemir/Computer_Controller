@@ -1,54 +1,66 @@
 #ifndef BUTTON_CONTROLLER_H
 #define BUTTON_CONTROLLER_H
 
-#include <Arduino.h>
-#include <ezButton.h>
 #include "SimpleBuzzer.h"
+#include "Globals.h"
+#include <ezButton.h>
 
+/**
+ * @brief Manages a single button, detecting short, long, and very long presses.
+ * 
+ * This class uses the ezButton library for debouncing and basic press detection,
+ * and extends it to differentiate between various press durations.
+ * It can optionally interact with a SimpleBuzzer for auditory feedback.
+ */
 class ButtonController {
 public:
-    // Button press states
+    /**
+     * @brief Defines the possible states of a button press.
+     */
     enum class State {
-        NO_PRESS,
-        SHORT_PRESS,
-        LONG_PRESS,
-        VERY_LONG_PRESS
+        NO_PRESS,        ///< Button is not currently pressed.
+        SHORT_PRESS,     ///< Button was pressed for a short duration.
+        LONG_PRESS,      ///< Button was pressed for a long duration.
+        VERY_LONG_PRESS  ///< Button was pressed for a very long duration.
     };
 
-    // Press duration thresholds (in milliseconds)
-    static constexpr uint16_t SHORT_PRESS_DURATION = 50;    // Minimum duration for a valid press
-    static constexpr uint16_t LONG_PRESS_DURATION = 1000;   // 1 second for long press
-    static constexpr uint16_t VERY_LONG_PRESS_DURATION = 3000; // 3 seconds for very long press
-    static constexpr uint16_t DEBOUNCE_TIME = 50;           // Debounce time in milliseconds
+    /**
+     * @brief Constructor for ButtonController.
+     * @param pin The GPIO pin number to which the button is connected.
+     * @param b Reference to a SimpleBuzzer object for auditory feedback.
+     */
+    ButtonController(uint8_t pin, SimpleBuzzer& b);
 
-    // Constructor with explicit pull-up mode
-    ButtonController(uint8_t pin) : button(pin, INPUT_PULLUP), buzzer(27) {
-        // Configure button with pull-up
-        pinMode(pin, INPUT_PULLUP);
-        button.setDebounceTime(DEBOUNCE_TIME);
-        button.setCountMode(COUNT_FALLING);  // Count when button goes from HIGH to LOW
-        pressStartTime = 0;
-        currentState = State::NO_PRESS;
-    }
+    /**
+     * @brief Initializes the button controller.
+     * Currently, this method does not perform any specific initialization beyond what the constructor does.
+     */
+    void begin();
 
-    void begin() {
-        // Initialize buzzer
-        buzzer.begin();
-        buzzer.beepPattern(3, 100, 100);
-    }
-
+    /**
+     * @brief Main loop function for the button controller.
+     * This function must be called repeatedly in the main loop to update the button's state
+     * and detect press types.
+     */
     void loop();
     
-    // State queries
+    /**
+     * @brief Gets the current state of the button press.
+     * @return The current press state (NO_PRESS, SHORT_PRESS, LONG_PRESS, VERY_LONG_PRESS).
+     */
     State state() const;
+
+    /**
+     * @brief Checks if the button is currently considered to be in any pressed state (short, long, or very long).
+     * @return True if the button is in any pressed state, false otherwise.
+     */
     bool isPressing() const;
-    bool isPressingRaw() const;
 
 private:
-    ezButton button;
-    SimpleBuzzer buzzer;
-    uint16_t pressStartTime;
-    State currentState;
+    ezButton button;                  ///< ezButton instance for handling the raw button input.
+    SimpleBuzzer& buzzer;             ///< Reference to a SimpleBuzzer for feedback.
+    unsigned long pressStartTime = 0; ///< Timestamp (from millis()) when the button was initially pressed.
+    State currentState;               ///< The current detected press state of the button.
 };
 
 #endif // BUTTON_CONTROLLER_H 

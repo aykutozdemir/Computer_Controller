@@ -1,32 +1,35 @@
-#include "ComputerController.h"
-#include "ButtonController.h"
-#include "Globals.h"
-#include "CommandHandler.h"
-#include <SimpleTimer.h>
-#include "esp_log.h"
+#include "ComputerController.h" 
 
 // ESP32 core includes
 #include <WiFi.h>
 
 // Third-party library includes
 #include <WiFiManager.h>
-#include <StaticSerialCommands.h>
-#include "esp_task_wdt.h"
 
 // Define log tag
 static const char* TAG = "ComputerController";
 
 ComputerController::ComputerController() :
     telegramBot(BOT_TOKEN, telegramClient),
-    wifiCheckTimer(10000),
-    debugTimer(10000),
-    displayUpdateTimer(DISPLAY_UPDATE_INTERVAL),
-    button(14),  // Initialize button on pin 14
+    commandHandler(nullptr),
+    wifiCheckTimer(5000),
+    debugTimer(1000),
+    displayUpdateTimer(100),
+    rfCheckTimer(50),
+    relayTimer(500),
+    display(),
+    buzzer(BUZZER_PIN),
+    buttons(BUTTON_PIN, buzzer),
+    rfReceiver(RF_INPUT_PIN),
     isConnected(false),
-    lastTelegramCheck(0)
+    settings(PersistentSettings::getInstance()),
+    currentRelayState(RelayState::IDLE)
 {
-    ESP_LOGI(TAG, "Initializing ComputerController");
-    commandHandler = new CommandHandler(this);
+    // Initialize relay pins
+    pinMode(POWER_RELAY_PIN, OUTPUT);
+    pinMode(RESET_RELAY_PIN, OUTPUT);
+    digitalWrite(POWER_RELAY_PIN, HIGH);
+    digitalWrite(RESET_RELAY_PIN, HIGH);
 }
 
 void ComputerController::reset()
@@ -38,36 +41,22 @@ void ComputerController::reset()
     WiFi.mode(WIFI_OFF);
     delay(1000);
 
-    ESP_LOGI(TAG, "Restarting ESP32...");
+    ESP_LOGI(TAG, "Restarting ESP32 in 1 second...");
     Serial.flush();
     ESP.restart();
 }
 
 void ComputerController::setup()
-{
-    // Initialize Serial for debugging first
-    Serial.begin(115200);
-    while (!Serial) {
-        delay(10);
-    }
-    
-    // Set ESP32 log level to show all logs
-    esp_log_level_set("*", ESP_LOG_VERBOSE);  // Set all tags to verbose level
-    esp_log_level_set("ComputerController", ESP_LOG_VERBOSE);
-    esp_log_level_set("CommandHandler", ESP_LOG_VERBOSE);
-    
+{        
+    ESP_LOGI(TAG, "Initializing ComputerController");
     ESP_LOGI(TAG, "Setting up ComputerController");
-    
-    // Initialize watchdog timer with a longer timeout and disable panic handler
-    esp_task_wdt_init(60, false); // 60 second timeout, no panic handler
-    esp_task_wdt_add(NULL);
     
     // Initialize display with error checking
     try {
         display.begin();
         display.clear();
         display.setTextSize(2);
-        display.setTextColor(DISPLAY_WHITE);
+        display.setTextColor(DisplayColors::WHITE);
         display.setCursor(10, 10);
         display.println("Starting...");
         ESP_LOGI(TAG, "Display initialized successfully");
@@ -78,9 +67,21 @@ void ComputerController::setup()
     // Add delay after display initialization
     delay(100);
     
-    // Initialize button
-    button.begin();
-    ESP_LOGI(TAG, "Button initialized");
+    // Initialize buzzer
+    buzzer.begin();
+    ESP_LOGI(TAG, "Buzzer initialized");
+    
+    // Initialize buttons
+    buttons.begin();
+    ESP_LOGI(TAG, "Buttons initialized");
+
+    // Initialize PowerResetController
+    powerReset.begin();
+    ESP_LOGI(TAG, "PowerResetController initialized");
+    
+    // Initialize RF receiver
+    rfReceiver.begin();
+    ESP_LOGI(TAG, "RF receiver initialized");
     
     // Initialize WiFi
     connectWiFi();
@@ -90,30 +91,39 @@ void ComputerController::setup()
     ESP_LOGI(TAG, "RTC initialized");
     
     // Initialize CommandHandler
-    if (commandHandler) {
-        commandHandler->setup();
-        ESP_LOGI(TAG, "CommandHandler initialized");
-    } else {
-        ESP_LOGE(TAG, "CommandHandler is null!");
-    }
+    commandHandler = new CommandHandler(this);
+    commandHandler->setup();
+    ESP_LOGI(TAG, "CommandHandler initialized");
     
     // Initial display update
     updateDisplay();
-    
-    // Feed the watchdog
-    esp_task_wdt_reset();
+
+    // Set ESP32 log level to show only important logs
+    esp_log_level_set("*", ESP_LOG_INFO);  // Set all tags to info level
+    esp_log_level_set("ssl_client", ESP_LOG_INFO);  // Set all tags to info level
 }
 
 void ComputerController::loop()
 {
-    // Feed watchdog at the start of each loop
-    esp_task_wdt_reset();
-    
     // Update button state and check for presses
-    button.loop();
+    buttons.loop();
+
+    if (commandHandler) {
+        commandHandler->loop();
+    }
+
+    // Update physical power/reset buttons
+    powerReset.loop();
+    
+    // Handle power and reset buttons
+    handlePowerResetButtons();
+    
+    // Update relay state
+    updateRelayState();
     
     // Check button state and trace
-    switch (button.state()) {
+    ButtonController::State buttonState = buttons.state();
+    switch (buttonState) {
         case ButtonController::State::NO_PRESS:
             // No press detected, no need to trace
             break;
@@ -131,22 +141,44 @@ void ComputerController::loop()
             break;
     }
     
+    // Check RF receiver
+    if (rfCheckTimer.isReady()) {
+        rfCheckTimer.reset();
+        handleRFInput();
+    }
+    
     // Update display using SimpleTimer
     if (displayUpdateTimer.isReady()) {
         displayUpdateTimer.reset();
         updateDisplay();
-        esp_task_wdt_reset(); // Feed watchdog after display update
+    }
+}
+
+void ComputerController::handleRFInput()
+{
+    // Read RF receiver state
+    bool rfValue = rfReceiver.read();
+    
+    // Check if the value has changed
+    if (rfReceiver.hasChanged()) {
+        ESP_LOGI(TAG, "RF value changed to: %s", rfValue ? "HIGH" : "LOW");
+        
+        // Check if we received a new button code
+        if (rfReceiver.isNewButtonCode()) {
+            uint32_t buttonCode = rfReceiver.getButtonCode();
+            ESP_LOGI(TAG, "Received button code: 0x%X", buttonCode);
+            ESP_LOGI(TAG, "Button Code (decimal): %lu", buttonCode);
+        }
     }
 }
 
 void ComputerController::updateDisplay()
 {
-    ESP_LOGI(TAG, "Updating display");
     display.clear();
     
     // Display WiFi status
     display.setTextSize(2);
-    display.setTextColor(isConnected ? DISPLAY_GREEN : DISPLAY_YELLOW);
+    display.setTextColor(isConnected ? DisplayColors::GREEN : DisplayColors::YELLOW);
     display.setCursor(10, 10);
     display.print("WiFi: ");
     display.println(isConnected ? "Connected" : "Config Mode");
@@ -154,7 +186,7 @@ void ComputerController::updateDisplay()
     if (isConnected) {
         // Display time
         display.setTextSize(2);
-        display.setTextColor(DISPLAY_WHITE);
+        display.setTextColor(DisplayColors::WHITE);
         display.setCursor(10, 45);
         display.print("Time: ");
         display.println(rtc.getTime().c_str());
@@ -180,7 +212,7 @@ void ComputerController::updateDisplay()
     } else {
         // Show configuration instructions
         display.setTextSize(2);
-        display.setTextColor(DISPLAY_WHITE);
+        display.setTextColor(DisplayColors::WHITE);
         display.setCursor(10, 45);
         display.println("Connect to:");
         display.setCursor(10, 70);
@@ -201,7 +233,7 @@ void ComputerController::connectWiFi()
     // Clear display and show initial message
     display.clear();
     display.setTextSize(3);
-    display.setTextColor(DISPLAY_WHITE);
+    display.setTextColor(DisplayColors::WHITE);
     display.setCursor(10, 10);
     display.println("WiFi Setup");
     display.setTextSize(2);
@@ -226,7 +258,7 @@ void ComputerController::connectWiFi()
         isConnected = true;
         display.clear();
         display.setTextSize(3);
-        display.setTextColor(DISPLAY_GREEN);
+        display.setTextColor(DisplayColors::GREEN);
         display.setCursor(10, 10);
         display.println("WiFi Connected!");
         display.setTextSize(2);
@@ -237,20 +269,104 @@ void ComputerController::connectWiFi()
         
         // Configure SSL client for Telegram
         telegramClient.setInsecure(); // Skip certificate verification
-        telegramClient.setTimeout(10000); // 10 second timeout
-        
-        // Feed watchdog after successful connection
-        esp_task_wdt_reset();
+        telegramClient.setTimeout(4000); // 4 second timeout
     } else {
         isConnected = false;
         display.clear();
         display.setTextSize(3);
-        display.setTextColor(DISPLAY_YELLOW);
+        display.setTextColor(DisplayColors::YELLOW);
         display.setCursor(10, 10);
         display.println("WiFi Config");
         display.setTextSize(2);
         display.setCursor(10, 45);
         display.println("Connect to:");
         ESP_LOGE(TAG, "WiFi connection failed");
+    }
+}
+
+void ComputerController::handlePowerResetButtons()
+{
+    // Only handle new button presses if we're in IDLE state
+    if (currentRelayState == RelayState::IDLE) {
+        // Handle power button
+        if (powerReset.isPowerPressed()) {
+            if (!PersistentSettings::getInstance().isChildLockEnabled()) {
+                ESP_LOGI(TAG, "Power button pressed");
+                currentRelayState = RelayState::POWER_PRESSING;
+                setPowerRelay(true);
+                relayTimer.reset();
+            } else {
+                ESP_LOGW(TAG, "Power button press ignored, child lock enabled.");
+            }
+        }
+        // Handle reset button
+        else if (powerReset.isResetPressed()) {
+            if (!PersistentSettings::getInstance().isChildLockEnabled()) {
+                ESP_LOGI(TAG, "Reset button pressed");
+                currentRelayState = RelayState::RESET_PRESSING;
+                setResetRelay(true);
+                relayTimer.reset();
+            } else {
+                ESP_LOGW(TAG, "Reset button press ignored, child lock enabled.");
+            }
+        }
+    }
+}
+
+void ComputerController::updateRelayState()
+{
+    // Check if relay timer has expired
+    if (relayTimer.isReady()) {
+        switch (currentRelayState) {
+            case RelayState::POWER_PRESSING:
+                setPowerRelay(false);
+                currentRelayState = RelayState::IDLE;
+                ESP_LOGI(TAG, "Power relay released");
+                break;
+                
+            case RelayState::RESET_PRESSING:
+                setResetRelay(false);
+                currentRelayState = RelayState::IDLE;
+                ESP_LOGI(TAG, "Reset relay released");
+                break;
+                
+            case RelayState::IDLE:
+                // Nothing to do
+                break;
+        }
+    }
+}
+
+void ComputerController::setPowerRelay(bool state)
+{
+    digitalWrite(POWER_RELAY_PIN, state ? LOW : HIGH);
+    ESP_LOGI(TAG, "Power relay %s (Pin State: %s)", state ? "ACTIVATED" : "DEACTIVATED", state ? "LOW" : "HIGH");
+}
+
+void ComputerController::setResetRelay(bool state)
+{
+    digitalWrite(RESET_RELAY_PIN, state ? LOW : HIGH);
+    ESP_LOGI(TAG, "Reset relay %s (Pin State: %s)", state ? "ACTIVATED" : "DEACTIVATED", state ? "LOW" : "HIGH");
+}
+
+void ComputerController::activatePowerRelay() {
+    if (currentRelayState == RelayState::IDLE) {
+        ESP_LOGI(TAG, "Activating power relay via command/external call");
+        currentRelayState = RelayState::POWER_PRESSING;
+        setPowerRelay(true); // Activate relay
+        relayTimer.reset();  // Start timer for deactivation
+    } else {
+        ESP_LOGW(TAG, "Cannot activate power relay, another relay operation is in progress.");
+    }
+}
+
+void ComputerController::activateResetRelay() {
+    if (currentRelayState == RelayState::IDLE) {
+        ESP_LOGI(TAG, "Activating reset relay via command/external call");
+        currentRelayState = RelayState::RESET_PRESSING;
+        setResetRelay(true); // Activate relay
+        relayTimer.reset();  // Start timer for deactivation
+    } else {
+        ESP_LOGW(TAG, "Cannot activate reset relay, another relay operation is in progress.");
     }
 }
