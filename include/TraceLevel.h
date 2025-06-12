@@ -1,0 +1,17 @@
+#ifndef TRACE_LEVEL_H
+#define TRACE_LEVEL_H
+
+// Trace levels
+#define TRACE_LEVEL_OFF    0
+#define TRACE_LEVEL_ERROR  1
+#define TRACE_LEVEL_WARN   2
+#define TRACE_LEVEL_INFO   3
+#define TRACE_LEVEL_DEBUG  4
+#define TRACE_LEVEL_TRACE  5
+
+// Class-specific Debug Settings
+#define DEBUG_COMPUTER_CONTROLER TRACE_LEVEL_INFO
+#define DEBUG_COMMAND_HANDLER    TRACE_LEVEL_INFO
+#define DEBUG_DISPLAY_MANAGER    TRACE_LEVEL_INFO
+
+#endif // TRACE_LEVEL_H 

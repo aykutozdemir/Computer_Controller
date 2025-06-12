@@ -1,0 +1,20 @@
+{
+    "name": "SimpleBuzzer",
+    "version": "1.0.0",
+    "description": "A simple library for controlling a DC buzzer",
+    "keywords": "buzzer, sound, audio",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/yourusername/SimpleBuzzer.git"
+    },
+    "authors": [
+        {
+            "name": "Your Name",
+            "email": "your.email@example.com",
+            "maintainer": true
+        }
+    ],
+    "license": "MIT",
+    "frameworks": "arduino",
+    "platforms": "*"
+} 
