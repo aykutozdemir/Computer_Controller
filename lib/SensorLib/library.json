@@ -1,0 +1,14 @@
+{
+  "name": "SensorLib",
+  "version": "1.0.0",
+  "keywords": ["sensor", "AHT20", "BMP280", "environment"],
+  "description": "Environmental sensor abstraction (AHT20, BMP280) for ComputerController project.",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "authors": {
+    "name": "ComputerController Team"
+  },
+  "build": {
+    "srcFilter": "+<*.cpp>"
+  }
+} 

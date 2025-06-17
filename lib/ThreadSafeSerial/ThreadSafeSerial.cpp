@@ -1,4 +1,6 @@
 #include "ThreadSafeSerial.h"
+#include "SimpleTimer.h"
+#include <esp_task_wdt.h>
 
 // Initialize static members
 const char* ThreadSafeSerial::TAG = "ThreadSafeSerial";
@@ -9,7 +11,7 @@ portMUX_TYPE ThreadSafeSerial::serialMux = portMUX_INITIALIZER_UNLOCKED;
 // Serial task that runs on Core 0
 void IRAM_ATTR ThreadSafeSerial::serialTask(void* arg) {
     SerialMessage msg;
-    SimpleTimer<> watchdogTimer(1000);  // Feed watchdog every 1 second
+    SimpleTimer<unsigned long> watchdogTimer(1000);  // Feed watchdog every 1 second
     
     while (1) {
         esp_task_wdt_reset();  // Reset watchdog at the start of each loop

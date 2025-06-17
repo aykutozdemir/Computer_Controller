@@ -1,10 +1,5 @@
 #include "ComputerController.h" 
-
-// ESP32 core includes
-#include <WiFi.h>
-
-// Third-party library includes
-#include <WiFiManager.h>
+#include "Credentials.h"
 
 // Define log tag
 static const char* TAG = "ComputerController";
@@ -21,15 +16,26 @@ ComputerController::ComputerController() :
     buzzer(BUZZER_PIN),
     buttons(BUTTON_PIN, buzzer),
     rfReceiver(RF_INPUT_PIN),
+    rfStudyManager(rfReceiver, settings),
     isConnected(false),
+    led(LED_PIN),
     settings(PersistentSettings::getInstance()),
-    currentRelayState(RelayState::IDLE)
+    currentRelayState(RelayState::IDLE),
+    gpuFan(GPU_FAN_CONTROL_PIN, GPU_FAN_PWM_PIN, GPU_FAN_PWM_FREQ, GPU_FAN_PWM_RESOLUTION),
+    aht20(),
+    bmp280()
 {
     // Initialize relay pins
     pinMode(POWER_RELAY_PIN, OUTPUT);
     pinMode(RESET_RELAY_PIN, OUTPUT);
     digitalWrite(POWER_RELAY_PIN, HIGH);
     digitalWrite(RESET_RELAY_PIN, HIGH);
+
+    // Set initial buzzer state from persistent settings
+    buzzer.setEnabled(settings.isBuzzerEnabled());
+    
+    // Initialize fan to off state
+    setGpuFanSpeed(0);
 }
 
 void ComputerController::reset()
@@ -82,6 +88,10 @@ void ComputerController::setup()
     // Initialize RF receiver
     rfReceiver.begin();
     ESP_LOGI(TAG, "RF receiver initialized");
+
+    // Initialize LED controller
+    led.begin();
+    ESP_LOGI(TAG, "LED controller initialized");
     
     // Initialize WiFi
     connectWiFi();
@@ -95,33 +105,76 @@ void ComputerController::setup()
     commandHandler->setup();
     ESP_LOGI(TAG, "CommandHandler initialized");
     
+    // Create peripheral handling task
+    xTaskCreatePinnedToCore(
+        peripheralTaskRunner,     // Task function
+        "PeripheralTask",       // Name of the task
+        4096,                   // Stack size in words
+        this,                   // Task input parameter
+        1,                      // Priority of the task
+        NULL,                   // Task handle
+        APP_CPU_NUM             // Core where the task should run
+    );
+
     // Initial display update
     updateDisplay();
 
     // Set ESP32 log level to show only important logs
     esp_log_level_set("*", ESP_LOG_INFO);  // Set all tags to info level
     esp_log_level_set("ssl_client", ESP_LOG_INFO);  // Set all tags to info level
+
+    // Post setup
+    buzzer.beepPattern(2, 250, 250);
+
+    gpuFan.begin();
+
+    // Initialise environmental sensors
+    if (aht20.begin()) {
+        ESP_LOGI(TAG, "AHT20 sensor initialised");
+    } else {
+        ESP_LOGW(TAG, "AHT20 sensor not found or failed to initialise");
+    }
+
+    if (bmp280.begin()) {
+        ESP_LOGI(TAG, "BMP280 sensor initialised");
+    } else {
+        ESP_LOGW(TAG, "BMP280 sensor not found or failed to initialise");
+    }
+}
+
+// Static task function to run peripheral loops
+void ComputerController::peripheralTaskRunner(void* pvParameters) {
+    ComputerController* instance = static_cast<ComputerController*>(pvParameters);
+    ESP_LOGI(TAG, "Peripheral task started on core %d", xPortGetCoreID());
+    for (;;) {
+        instance->buttons.loop();
+        instance->powerReset.loop();
+        instance->handlePowerResetButtons();
+        instance->updateRelayState();
+        instance->buzzer.loop();
+        instance->led.loop();
+        instance->gpuFan.loop();
+        instance->aht20.loop();
+        instance->bmp280.loop();
+
+        // Process RF study
+        instance->rfStudyManager.process();
+
+        // Check RF receiver for normal operation
+        instance->handleRFInput(); // handleRFInput contains its own timer and listening checks
+        vTaskDelay(pdMS_TO_TICKS(1)); 
+    }
 }
 
 void ComputerController::loop()
 {
-    // Update button state and check for presses
-    buttons.loop();
-
     if (commandHandler) {
         commandHandler->loop();
     }
 
-    // Update physical power/reset buttons
-    powerReset.loop();
-    
-    // Handle power and reset buttons
-    handlePowerResetButtons();
-    
-    // Update relay state
-    updateRelayState();
-    
     // Check button state and trace
+    // This logging remains in the main loop. It reads the state updated by peripheralTaskRunner.
+    // Ensure ButtonController::state() is safe for concurrent access (typically true for simple getters).
     ButtonController::State buttonState = buttons.state();
     switch (buttonState) {
         case ButtonController::State::NO_PRESS:
@@ -134,18 +187,15 @@ void ComputerController::loop()
             
         case ButtonController::State::LONG_PRESS:
             ESP_LOGI(TAG, "Button: Long press detected");
+            reset();
             break;
             
         case ButtonController::State::VERY_LONG_PRESS:
             ESP_LOGI(TAG, "Button: Very long press detected");
+            handleFactoryReset();
             break;
     }
     
-    // Check RF receiver
-    if (rfCheckTimer.isReady()) {
-        rfCheckTimer.reset();
-        handleRFInput();
-    }
     
     // Update display using SimpleTimer
     if (displayUpdateTimer.isReady()) {
@@ -154,20 +204,31 @@ void ComputerController::loop()
     }
 }
 
-void ComputerController::handleRFInput()
-{
-    // Read RF receiver state
-    bool rfValue = rfReceiver.read();
-    
-    // Check if the value has changed
-    if (rfReceiver.hasChanged()) {
-        ESP_LOGI(TAG, "RF value changed to: %s", rfValue ? "HIGH" : "LOW");
-        
-        // Check if we received a new button code
-        if (rfReceiver.isNewButtonCode()) {
-            uint32_t buttonCode = rfReceiver.getButtonCode();
-            ESP_LOGI(TAG, "Received button code: 0x%X", buttonCode);
-            ESP_LOGI(TAG, "Button Code (decimal): %lu", buttonCode);
+void ComputerController::handleRFInput() {
+    // Skip RF processing if RF is disabled or RF study is active
+    if (!PersistentSettings::getInstance().isRFEnabled()) {
+        return;
+    }
+
+    // Skip if RF study is active
+    if (rfStudyManager.isListening()) {
+        return;
+    }
+
+    // Check timer to control frequency of checking for *new* codes
+    if (!rfCheckTimer.isReady()) {
+        return;
+    }
+    rfCheckTimer.reset();
+
+    // Poll the RF receiver for new data.
+    // rfReceiver.read() returns true if a new, debounced code was received.
+    if (rfReceiver.read()) {
+        uint32_t receivedCode = rfReceiver.getButtonCode(); // Gets the code and clears the new data flag
+        uint32_t storedCode = PersistentSettings::getInstance().getRfButtonCode();
+        if (storedCode != 0 && receivedCode == storedCode) {
+            ESP_LOGI(TAG, "RF code match detected, activating power relay");
+            activatePowerRelay();
         }
     }
 }
@@ -230,6 +291,9 @@ void ComputerController::connectWiFi()
 {
     ESP_LOGI(TAG, "Connecting to WiFi...");
     
+    // Set LED to connecting state
+    led.setStatus(LedController::Status::CONNECTING);
+    
     // Clear display and show initial message
     display.clear();
     display.setTextSize(3);
@@ -256,6 +320,7 @@ void ComputerController::connectWiFi()
     // Try to connect
     if (wifiManager.autoConnect(apName, apPassword)) {
         isConnected = true;
+        led.setStatus(LedController::Status::CONNECTED); // WiFi is connected
         display.clear();
         display.setTextSize(3);
         display.setTextColor(DisplayColors::GREEN);
@@ -272,6 +337,7 @@ void ComputerController::connectWiFi()
         telegramClient.setTimeout(4000); // 4 second timeout
     } else {
         isConnected = false;
+        // LED remains in CONNECTING state (blinking) for AP/Config mode
         display.clear();
         display.setTextSize(3);
         display.setTextColor(DisplayColors::YELLOW);
@@ -369,4 +435,31 @@ void ComputerController::activateResetRelay() {
     } else {
         ESP_LOGW(TAG, "Cannot activate reset relay, another relay operation is in progress.");
     }
+}
+
+bool ComputerController::setGpuFanSpeed(uint8_t speed) {
+    if (speed > 100) {
+        return false;
+    }
+    
+    gpuFan.setSpeed(speed);
+    return true;
+}
+
+uint8_t ComputerController::getGpuFanSpeed() const {
+    return gpuFan.getSpeed();
+}
+
+void ComputerController::handleFactoryReset() {
+    ESP_LOGI(TAG, "Factory reset triggered by button press");
+    
+    // Play triple beep to indicate factory reset
+    buzzer.beepPattern(3, 200, 100);
+    delay(300); // Wait for beeps to complete
+    
+    // Clear all settings
+    PersistentSettings::getInstance().clearAll();
+    
+    // Reset the MCU
+    ESP.restart();
 }

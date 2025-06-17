@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Globals.h"
-#include <TFT_eSPI.h>
 
 /**
  * @brief Manages the display output using the TFT_eSPI library.

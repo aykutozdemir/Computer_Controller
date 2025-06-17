@@ -6,6 +6,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "SimpleTimer.h"
 
 // Message structure for Serial operations with proper alignment
 struct __attribute__((aligned(4))) SerialMessage {

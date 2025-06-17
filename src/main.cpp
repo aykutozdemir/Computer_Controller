@@ -1,4 +1,3 @@
-#include "Globals.h"
 #include "ComputerController.h"
 
 // Define log tag for this file

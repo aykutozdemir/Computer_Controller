@@ -1,9 +1,9 @@
-#ifndef BUTTON_CONTROLLER_H
-#define BUTTON_CONTROLLER_H
+#pragma once
 
-#include "SimpleBuzzer.h"
-#include "Globals.h"
 #include <ezButton.h>
+#include "SimpleBuzzer.h"
+#include "SimpleTimer.h"
+#include "Globals.h"
 
 /**
  * @brief Manages a single button, detecting short, long, and very long presses.
@@ -59,8 +59,7 @@ public:
 private:
     ezButton button;                  ///< ezButton instance for handling the raw button input.
     SimpleBuzzer& buzzer;             ///< Reference to a SimpleBuzzer for feedback.
+    SimpleTimer<> beepTimer;          ///< Timer for generating auditory feedback.
     unsigned long pressStartTime = 0; ///< Timestamp (from millis()) when the button was initially pressed.
     State currentState;               ///< The current detected press state of the button.
-};
-
-#endif // BUTTON_CONTROLLER_H 
+}; 

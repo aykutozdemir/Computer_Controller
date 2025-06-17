@@ -1,12 +1,15 @@
 #pragma once
 
 #include "Globals.h"
-#include "CommandHandler.h"
 #include "DisplayManager.h"
 #include "ButtonController.h"
 #include "PowerResetController.h"
-#include "PersistentSettings.h"
-#include "MXRMReceiver.h"
+#include "CommandHandler.h"
+#include "LedController.h"
+#include "RFStudyManager.h"
+#include "RCSwitchReceiver.h"
+
+#include <FanController.h>
 
 /**
  * @brief Main controller class for the Computer Controller project.
@@ -49,6 +52,12 @@ public:
      */
     WiFiClientSecure& getTelegramClient() { return telegramClient; }    
     /**
+     * @brief Gets a reference to the SimpleBuzzer instance.
+     * @return Reference to the SimpleBuzzer object.
+     */
+    SimpleBuzzer& getBuzzer() { return buzzer; }
+
+    /**
      * @brief Updates the content displayed on the screen.
      */
     void updateDisplay();
@@ -57,10 +66,76 @@ public:
      * @brief Activates the power relay for a predefined duration.
      */
     void activatePowerRelay();
+    
     /**
      * @brief Activates the reset relay for a predefined duration.
      */
     void activateResetRelay();
+
+    /**
+     * @brief Sets the GPU fan speed.
+     * @param speed Speed value between 0 (off) and 100 (full speed).
+     * @return true if the speed was set successfully, false otherwise.
+     */
+    bool setGpuFanSpeed(uint8_t speed);
+
+    /**
+     * @brief Gets the current GPU fan speed.
+     * @return Current fan speed (0-100).
+     */
+    uint8_t getGpuFanSpeed() const;
+
+    /**
+     * @brief Checks if the GPU fan is enabled.
+     * @return true if the fan is enabled, false otherwise.
+     */
+    bool isGpuFanEnabled() const { return gpuFan.isEnabled(); }
+
+    /**
+     * @brief Gets the current GPU fan RPM.
+     * @return Current fan RPM.
+     */
+    uint16_t getGpuFanRPM() const { return gpuFan.getRPM(); }
+
+    /**
+     * @brief Gets a reference to the RCSwitchReceiver instance.
+     * @return Reference to the RCSwitchReceiver object.
+     */
+    RCSwitchReceiver& getRCSwitchReceiver() { return rfReceiver; }
+
+    /**
+     * @brief Gets a reference to the RFStudyManager instance.
+     * @return Reference to the RFStudyManager object.
+     */
+    RFStudyManager& getRFStudyManager() { return rfStudyManager; }
+
+    /* ---------------------------------------------------------------------
+     * Environmental sensor accessors
+     * ------------------------------------------------------------------*/
+
+    /**
+     * @brief Returns the most recent ambient temperature value.
+     * @return Temperature in °C, or NAN if not available.
+     */
+    float getAmbientTemperature() const { return aht20.getTemperature(); }
+
+    /**
+     * @brief Returns the most recent relative-humidity value.
+     * @return Humidity in percent, or NAN if not available.
+     */
+    float getRelativeHumidity() const { return aht20.getHumidity(); }
+
+    /**
+     * @brief Returns the most recent barometric pressure.
+     * @return Pressure in Pascals, or NAN if not available.
+     */
+    float getBarometricPressure() const { return bmp280.getPressure(); }
+
+    /**
+     * @brief Returns the most recent altitude calculated from pressure.
+     * @return Altitude in metres, or NAN if not available.
+     */
+    float getAltitude() const { return bmp280.getAltitude(); }
 
 private:
     // Command channels
@@ -85,7 +160,14 @@ private:
     ButtonController buttons;               ///< Controller for the main user button.
     PowerResetController powerReset;        ///< Controller for physical power/reset buttons.
     PersistentSettings& settings;           ///< Reference to persistent settings manager.
-    MXRMReceiver rfReceiver;                ///< RF receiver instance.
+    LedController led;                      ///< LED controller instance.
+    RCSwitchReceiver rfReceiver;            ///< RF receiver instance.
+    RFStudyManager rfStudyManager;          ///< RF study manager instance.
+    FanController gpuFan;                   ///< GPU fan controller
+
+    // Environmental sensors
+    AHT20Sensor aht20;                      ///< Temperature/Humidity sensor
+    BMP280Sensor bmp280;                    ///< Pressure/Temperature sensor
 
     bool isConnected = false;               ///< Flag indicating WiFi connection status.
     
@@ -106,4 +188,9 @@ private:
     void setPowerRelay(bool state);  // New method to control power relay
     void setResetRelay(bool state);  // New method to control reset relay
     void updateRelayState();  // New method to handle relay state machine
+
+    // Static task runner for peripheral handling
+    static void peripheralTaskRunner(void* pvParameters);
+
+    void handleFactoryReset();
 }; 

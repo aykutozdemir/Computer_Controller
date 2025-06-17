@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Globals.h"
-#include <Preferences.h>
 /**
  * @brief Manages persistent settings stored in Non-Volatile Storage (NVS).
  * 
@@ -29,6 +28,51 @@ public:
      */
     void setChildLockEnabled(bool enabled);
     
+    // Buzzer settings
+    /**
+     * @brief Checks if the buzzer is currently enabled.
+     * @return True if buzzer is enabled, false otherwise.
+     */
+    bool isBuzzerEnabled();
+
+    /**
+     * @brief Sets the state of the buzzer.
+     * @param enabled True to enable buzzer, false to disable.
+     */
+    void setBuzzerEnabled(bool enabled);
+
+    /**
+     * @brief Gets the stored RF button code.
+     * Retrieves the previously learned RF code for remote control functionality.
+     * @return The stored RF button code as a 32-bit unsigned integer.
+     */
+    uint32_t getRfButtonCode();
+
+    /**
+     * @brief Sets the RF button code.
+     * Stores a new RF code for remote control functionality.
+     * @param code The RF button code to store as a 32-bit unsigned integer.
+     */
+    void setRfButtonCode(uint32_t code);
+
+    /**
+     * @brief Checks if RF functionality is currently enabled.
+     * @return True if RF functionality is enabled, false otherwise.
+     */
+    bool isRFEnabled();
+
+    /**
+     * @brief Sets the state of RF functionality.
+     * @param enabled True to enable RF functionality, false to disable.
+     */
+    void setRFEnabled(bool enabled);
+    
+    /**
+     * @brief Clears all settings and resets them to their default values.
+     * This includes child lock, buzzer, RF settings, and RF button code.
+     */
+    void clearAll();
+    
     // Initialize settings
     /**
      * @brief Initializes the PersistentSettings manager.
@@ -53,7 +97,4 @@ private:
     
     static PersistentSettings* instance; ///< Singleton instance pointer.
     Preferences preferences;             ///< ESP32 Preferences object for NVS access.
-    
-    static constexpr const char* NAMESPACE = "compCtrl";      ///< Namespace for NVS storage.
-    static constexpr const char* KEY_CHILD_LOCK = "childLock"; ///< Key for storing child lock state.
 }; 
