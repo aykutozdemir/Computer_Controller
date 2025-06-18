@@ -20,6 +20,7 @@ void ButtonController::loop() {
         if (pressStartTime == 0) { // Just pressed
             pressStartTime = millis();
             buzzer.beep(BUTTON_PRESS_BEEP_DURATION_MS);
+            beepTimer.reset();
             currentState = State::SHORT_PRESS;
         } else { // Still pressed
             unsigned long duration = millis() - pressStartTime;
@@ -34,6 +35,7 @@ void ButtonController::loop() {
             // Periodic beep
             if (beepTimer.isReady()) {
                 buzzer.beep(BUTTON_PRESS_BEEP_DURATION_MS);
+                beepTimer.reset();
             }
         }
     } else if (pressStartTime != 0) { // Button was just released

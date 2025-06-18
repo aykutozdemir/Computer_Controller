@@ -125,6 +125,12 @@ public:
      */
     float getRelativeHumidity() const { return dht11.getHumidity(); }
 
+    /**
+     * @brief Gets the current PC power status.
+     * @return true if PC is powered on, false if powered off.
+     */
+    bool isPCPoweredOn() const { return digitalRead(PC_POWERED_ON_PIN) == HIGH; }
+
 private:
     // Command channels
     WiFiClientSecure telegramClient;        ///< Secure client for Telegram communication.

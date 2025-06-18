@@ -1,5 +1,8 @@
 #include "CommandHandler.h"
 #include <algorithm> // for std::min
+#include "Globals.h"
+#include <Arduino.h>
+#include <freertos/queue.h>
 
 // Define log tag
 static const char* TAG = "CommandHandler";
@@ -9,16 +12,23 @@ static const char* TAG = "CommandHandler";
 CommandHandler* CommandHandler::instance = nullptr;
 
 // Create larger buffers for command processing
-EXT_RAM_ATTR static char serialBuffer[4096];
-EXT_RAM_ATTR static char telegramBuffer[4096];
+#define SERIAL_BUFFER_SIZE 4096
+#define TELEGRAM_BUFFER_SIZE 4096
+#define TELEGRAM_PIPE_BUFFER_SIZE 4096
+
+EXT_RAM_ATTR static char serialBuffer[SERIAL_BUFFER_SIZE];
+EXT_RAM_ATTR static char telegramBuffer[TELEGRAM_BUFFER_SIZE];
 
 // Forward declaration
 static void sendSplitTelegramMessage(UniversalTelegramBot &bot, const String &chatId, const String &message);
 
 // Define command handlers as regular functions
 void cmdHelp(SerialCommands& sender, Args& args) {
+    ESP_LOGI(TAG, "Help command received");
+    
     CommandHandler* inst = CommandHandler::getInstance();
     if (!inst || !inst->getControllerInstance()) {
+        ESP_LOGE(TAG, "CommandHandler or Controller not initialized");
         // Use Utilities::printError for initialization errors
         Utilities::printError(sender, F("CommandHandler or Controller not initialized"));
         return;
@@ -29,6 +39,7 @@ void cmdHelp(SerialCommands& sender, Args& args) {
     sender.listAllCommands();
     // Always print OK for success, per simplification request.
     Utilities::printOK(sender);
+    ESP_LOGI(TAG, "Help command completed");
 }
 
 void cmdStatus(SerialCommands& sender, Args& args) {
@@ -48,6 +59,7 @@ void cmdStatus(SerialCommands& sender, Args& args) {
     String freeHeap = String(ESP.getFreeHeap());
     String gpuFanSpeed = String(inst->getControllerInstance()->getGpuFanSpeed()) + "%";
     String gpuFanRPM = String(inst->getControllerInstance()->getGpuFanRPM()) + " RPM";
+    String pcPowerStatus = inst->getControllerInstance()->isPCPoweredOn() ? "On" : "Off";
 
     // Environmental sensors
     auto appendValue = [](float v, const char* unit) {
@@ -63,6 +75,7 @@ void cmdStatus(SerialCommands& sender, Args& args) {
     String responseMsg = "Status:\n";
     responseMsg += "- WiFi: " + wifiStatus + "\n";
     responseMsg += "- IP: " + ipAddress + "\n";
+    responseMsg += "- PC Power: " + pcPowerStatus + "\n";
     responseMsg += "- Child Lock: " + childLockStatus + "\n";
     responseMsg += "- Buzzer: " + buzzerStatus + "\n";
     responseMsg += "- RF: " + rfStatus + "\n";
@@ -354,21 +367,73 @@ const Command* CommandHandler::getCommands(uint16_t* count)
 
 CommandHandler::CommandHandler(ComputerController* controller)
     : controller(controller),
-      telegramPipe(),
+      telegramPipe(TELEGRAM_PIPE_BUFFER_SIZE),
       serialCommandsSerial(Serial, cmdArray, kCommandCount, serialBuffer, sizeof(serialBuffer)),
       serialCommandsTelegram(telegramPipe.first, cmdArray, kCommandCount, telegramBuffer, sizeof(telegramBuffer)),
       m_currentTelegramChatId(),
       serialCheckTimer(SERIAL_CHECK_INTERVAL),
-      telegramUpdateTimer(MESSAGE_CHECK_INTERVAL)
+      telegramUpdateTimer(MESSAGE_CHECK_INTERVAL),
+      telegramTaskHandle(nullptr),
+      telegramQueue(nullptr),
+      responseQueue(nullptr)
 {
     // Set singleton instance pointer
     CommandHandler::instance = this;
 
     ESP_LOGI(TAG, "Initializing CommandHandler");
+    
+    // Create queue for Telegram messages
+    telegramQueue = xQueueCreate(10, sizeof(TelegramMessage));
+    if (!telegramQueue) {
+        ESP_LOGE(TAG, "Failed to create Telegram message queue!");
+        return;
+    }
+    
+    // Create task for processing Telegram messages
+    BaseType_t taskCreated = xTaskCreatePinnedToCore(
+        telegramTaskFunction,   // Task function
+        "TelegramTask",         // Task name
+        4096,                   // Stack size
+        this,                   // Task parameter
+        1,                      // Task priority
+        &telegramTaskHandle,    // Task handle
+        APP_CPU_NUM             // Run on APP CPU
+    );
+    
+    if (taskCreated != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create Telegram processing task!");
+        vQueueDelete(telegramQueue);
+        telegramQueue = nullptr;
+    }
+
+    // Create queue for Telegram responses
+    responseQueue = xQueueCreate(10, sizeof(TelegramResponse));
+    if (!responseQueue) {
+        ESP_LOGE(TAG, "Failed to create Telegram response queue!");
+        vQueueDelete(telegramQueue);
+        telegramQueue = nullptr;
+        return;
+    }
 }
 
 CommandHandler::~CommandHandler() {
     ESP_LOGI(TAG, "Destroying CommandHandler");
+    
+    if (telegramTaskHandle) {
+        vTaskDelete(telegramTaskHandle);
+        telegramTaskHandle = nullptr;
+    }
+    
+    if (telegramQueue) {
+        vQueueDelete(telegramQueue);
+        telegramQueue = nullptr;
+    }
+    
+    if (responseQueue) {
+        vQueueDelete(responseQueue);
+        responseQueue = nullptr;
+    }
+    
     if (CommandHandler::instance == this) {
         CommandHandler::instance = nullptr;
     }
@@ -377,12 +442,27 @@ CommandHandler::~CommandHandler() {
 void CommandHandler::setup()
 {
     ESP_LOGI(TAG, "Setting up CommandHandler");
+    
+    if (!Serial) {
+        ESP_LOGE(TAG, "Serial port not initialized!");
+        return;
+    }
+
+    while (Serial.available()) {
+        Serial.read();
+    }
+    
+    // Print welcome message and test command
+    Serial.println(F("\nComputer Controller Ready"));
+    Serial.println(F("Type 'help' for available commands"));
+    Serial.println();
 }
 
 void CommandHandler::loop()
 {
     handleSerialCommands();
     handleTelegramCommands();
+    handleTelegramResponses();
 }
 
 void CommandHandler::handleSerialCommands()
@@ -392,30 +472,30 @@ void CommandHandler::handleSerialCommands()
     }
     serialCheckTimer.reset();
 
-    // Set a timeout for serial command processing
-    SimpleTimer<> processTimer(20);  // 20ms timeout for processing
-
     // Process serial commands with timeout
     int available = Serial.available();
     if (available > 0) {
-        ESP_LOGD(TAG, "Processing %d bytes from serial", available);
+        ESP_LOGI(TAG, "Processing %d bytes from serial", available);
         
         // Process up to 256 bytes at a time to improve throughput while still yielding control
         const int MAX_BYTES_PER_LOOP = 256;
         int bytesProcessed = 0;
         
-        while (Serial.available() && bytesProcessed < MAX_BYTES_PER_LOOP && !processTimer.isReady()) {
+        while (Serial.available() && bytesProcessed < MAX_BYTES_PER_LOOP) {
+            char c = Serial.peek();
+            ESP_LOGD(TAG, "Processing byte: 0x%02X ('%c')", c, isprint(c) ? c : '.');
+            
+            // Ensure command is properly terminated
+            if (c == '\n' || c == '\r') {
+                ESP_LOGD(TAG, "Command terminator found");
+            }
+            
             serialCommandsSerial.readSerial();
             bytesProcessed++;
-            // No explicit delay; allow FreeRTOS scheduler to switch tasks naturally
         }
-        
-        if (processTimer.isReady()) {
-            ESP_LOGW(TAG, "Serial command processing took too long");
-        }
-        
+
         if (bytesProcessed > 0) {
-            ESP_LOGD(TAG, "Processed %d bytes", bytesProcessed);
+            ESP_LOGI(TAG, "Processed %d bytes", bytesProcessed);
         }
     }
 }
@@ -434,137 +514,213 @@ void CommandHandler::handleTelegramCommands()
     telegramUpdateTimer.reset();
     UniversalTelegramBot &bot = inst->getControllerInstance()->getTelegramBot();
 
-    SimpleTimer<> updateTimer(2000);          // 2-second software timeout
     int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
-
-    if (updateTimer.isReady())
-    {
-        ESP_LOGW(TAG, "Telegram getUpdates took too long");
-        return;
-    }
-
     if (numNewMessages > 0)
     {
-        ESP_LOGI(TAG, "Processing %d new messages", numNewMessages);
+        ESP_LOGI(TAG, "Queueing %d new messages", numNewMessages);
         for (int i = 0; i < numNewMessages; i++)
         {
-            SimpleTimer<> messageTimer(1000);
-            handleTelegramCommandsInternal(
-                String(bot.messages[i].chat_id),
-                bot.messages[i].text,
-                bot.messages[i].from_name);
-                
-            if (messageTimer.isReady()) {
-                ESP_LOGW(TAG, "Message processing took too long");
+            TelegramMessage msg;
+            msg.chatId = new String(bot.messages[i].chat_id);
+            msg.text = new String(bot.messages[i].text);
+            msg.fromName = new String(bot.messages[i].from_name);
+            
+            // Queue the message for processing
+            if (xQueueSend(telegramQueue, &msg, 0) != pdPASS) {
+                ESP_LOGW(TAG, "Failed to queue Telegram message from %s", msg.fromName->c_str());
+                // Free allocated memory to avoid leaks if the message could not be queued
+                delete msg.chatId;
+                delete msg.text;
+                delete msg.fromName;
             }
         }
     }
 }
 
-void CommandHandler::handleTelegramCommandsInternal(const String &chatId, const String &text, const String &fromName)
+void CommandHandler::handleTelegramResponses()
 {
-    CommandHandler* inst = getInstance();
-    // Enhanced null check for inst and controller instance
-    if (!inst || !inst->controller) {
-        ESP_LOGE(TAG, "CommandHandler::instance or controller is null in handleTelegramCommandsInternal!");
-        // Attempt to send an error message if possible
-        if (inst && inst->controller) { // Check again, just in case for sending error message
-             inst->controller->getTelegramBot().sendMessage(chatId, "Internal error: Command handler not ready.", "");
-        }
+    if (!responseQueue) {
+        ESP_LOGE(TAG, "Response queue is null!");
         return;
     }
 
-    String commandText = text; // Make a mutable copy to potentially modify
-    if (commandText.startsWith("/")) {
-        commandText.remove(0, 1); // Remove the leading '/'
-    }
-    commandText.toLowerCase(); // Convert command to lowercase for case-insensitive matching
-
-    ESP_LOGI(TAG, "Telegram msg from %s (%s): %s (processed: %s)", fromName.c_str(), chatId.c_str(), text.c_str(), commandText.c_str());
-
-    // Store chat_id temporarily for the callback to access
-    inst->m_currentTelegramChatId = chatId;
-    // Write command to pipe for StaticSerialCommands with timeout
-    SimpleTimer<> writeTimer(500);  // 500ms timeout for writing
-    if (!inst->telegramPipe.second.print(commandText)) { // Use the potentially modified commandText
-        ESP_LOGE(TAG, "Failed to write command text to telegram pipe!");
-        inst->m_currentTelegramChatId = "";
-        if (inst->controller) {
-            inst->controller->getTelegramBot().sendMessage(chatId, "Error: Could not process your command (internal pipe error).", "");
-        }
-        return;
-    }
-    if (!inst->telegramPipe.second.print('\n')) { // Ensure command is terminated by newline
-        ESP_LOGE(TAG, "Failed to write newline to telegram pipe!");
-        inst->m_currentTelegramChatId = "";
-        if (inst->controller) {
-            inst->controller->getTelegramBot().sendMessage(chatId, "Error: Could not process your command (internal pipe error).", "");
-        }
-        return;
-    }
-    // Process command from pipe with timeout
-    SimpleTimer<> processTimer(1000);  // Timeout for command processing itself
-    inst->serialCommandsTelegram.readSerial();
+    // Use static allocation to avoid heap issues
+    static TelegramResponse response;
     
-    // Clear the temporary chat_id
-    inst->m_currentTelegramChatId = "";
+    // Check if there are any messages in the queue
+    UBaseType_t queueSize = uxQueueMessagesWaiting(responseQueue);
+    if (queueSize > 0) {
+        ESP_LOGI(TAG, "Found %d messages in response queue", queueSize);
+    }
+    
+    while (xQueueReceive(responseQueue, &response, 0) == pdPASS) {
+        ESP_LOGI(TAG, "Processing response for chat ID: %s", response.chatId && !response.chatId->isEmpty() ? response.chatId->c_str() : "<empty>");
+        
+        if (controller) {
+            // Create copies of the strings (not cleared until after send)
+            String *chatIdCopy = response.chatId;
+            String *messageCopy = response.message;
 
-    // Read the response from the pipe with marker detection
+            // Send the message first (while original still intact)
+            if (chatIdCopy && messageCopy && !chatIdCopy->isEmpty() && !messageCopy->isEmpty()) {
+                ESP_LOGI(TAG, "Sending Telegram message to %s: %s", chatIdCopy->c_str(), messageCopy->c_str());
+                sendSplitTelegramMessage(controller->getTelegramBot(), *chatIdCopy, *messageCopy);
+            } else {
+                ESP_LOGW(TAG, "Skipping empty message or chat ID");
+            }
+
+            // Now that sending is done, clear the response struct to free memory
+            delete response.chatId;
+            delete response.message;
+            response.chatId = nullptr;
+            response.message = nullptr;
+            ESP_LOGI(TAG, "Response processed and cleared");
+        } else {
+            ESP_LOGE(TAG, "Controller is null, cannot send response");
+        }
+    }
+}
+
+void CommandHandler::telegramTaskFunction(void* parameter)
+{
+    CommandHandler* inst = static_cast<CommandHandler*>(parameter);
+    TelegramMessage msg;
+    
+    while (true) {
+        // Wait for a message to arrive in the queue
+        if (xQueueReceive(inst->telegramQueue, &msg, portMAX_DELAY) == pdPASS) {
+            inst->processTelegramMessage(msg);
+            // Free dynamically allocated strings inside the message after processing
+            delete msg.chatId;
+            delete msg.text;
+            delete msg.fromName;
+        }
+    }
+}
+
+void CommandHandler::processTelegramMessage(const TelegramMessage& msg)
+{
+    // Dereference pointers inside the struct
+    String commandText = *msg.text;
+    if (commandText.startsWith("/")) {
+        commandText.remove(0, 1);
+    }
+    commandText.toLowerCase();
+
+    ESP_LOGI(TAG, "Processing Telegram msg from %s (%s): %s (processed: %s)", 
+             msg.fromName->c_str(), msg.chatId->c_str(), msg.text->c_str(), commandText.c_str());
+
+    m_currentTelegramChatId = *msg.chatId;
+    if (!telegramPipe.second.print(commandText)) {
+        ESP_LOGE(TAG, "Failed to write command text to telegram pipe!");
+        m_currentTelegramChatId = "";
+        
+        // Create response with new strings
+        TelegramResponse response;
+        response.chatId = new String(*msg.chatId);
+        response.message = new String("Error: Could not process your command (internal pipe error).");
+        
+        // Send to queue and immediately clear local copy
+        if (xQueueSend(responseQueue, &response, 0) == pdPASS) {
+            ESP_LOGI(TAG, "Queued error response for chat ID: %s", msg.chatId->c_str());
+            response.chatId = nullptr;
+            response.message = nullptr;
+        } else {
+            ESP_LOGE(TAG, "Failed to queue error response!");
+            delete response.chatId;
+            delete response.message;
+        }
+        return;
+    }
+    
+    if (!telegramPipe.second.print('\n')) {
+        ESP_LOGE(TAG, "Failed to write newline to telegram pipe!");
+        m_currentTelegramChatId = "";
+        
+        // Create response with new strings
+        TelegramResponse response;
+        response.chatId = new String(*msg.chatId);
+        response.message = new String("Error: Could not process your command (internal pipe error).");
+        
+        // Send to queue and immediately clear local copy
+        if (xQueueSend(responseQueue, &response, 0) == pdPASS) {
+            ESP_LOGI(TAG, "Queued error response for chat ID: %s", msg.chatId->c_str());
+            response.chatId = nullptr;
+            response.message = nullptr;
+        } else {
+            ESP_LOGE(TAG, "Failed to queue error response!");
+            delete response.chatId;
+            delete response.message;
+        }
+        return;
+    }
+    
+    serialCommandsTelegram.readSerial();
+    m_currentTelegramChatId = "";
+
     String responseMessage = "";
     String currentLineBuffer = "";
     bool finishedReading = false;
-    SimpleTimer<> responseReadTimer(1500); // Timeout for reading the full response from the pipe
 
     ESP_LOGD(TAG, "Telegram response: Starting to read from pipe...");
 
-    while (!responseReadTimer.isReady() && !finishedReading) {
-        if (inst->telegramPipe.second.available() > 0) {
-            char c = (char)inst->telegramPipe.second.read();
+    SimpleTimer<> readTimer(READ_TIMEOUT_MS);
+
+    while (!finishedReading && !readTimer.isReady()) {
+        if (telegramPipe.second.available() > 0) {
+            char c = (char)telegramPipe.second.read();
             responseMessage += c;
             currentLineBuffer += c;
 
+            // Extend timeout as long as data keeps coming
+            readTimer.reset();
+
             if (c == '\n') {
                 ESP_LOGD(TAG, "Telegram response: Read line: [%s]", currentLineBuffer.c_str());
-                // Check for "ERROR: ...\r\n" (Utilities::printError sends "ERROR: <msg>\r\n")
-                if (currentLineBuffer.startsWith("ERROR: ")) { 
+                String trimmedLine = currentLineBuffer;
+                trimmedLine.trim();
+                if (trimmedLine.startsWith("ERROR:")) {
                     ESP_LOGI(TAG, "Telegram response: Found ERROR marker.");
                     finishedReading = true;
                 }
-                // Check for "\r\nOK\r\n" (Utilities::printOK sends "\r\nOK\r\n")
-                else if (currentLineBuffer.equals("\r\nOK\r\n")) {
+                else if (trimmedLine.equals("OK")) {
                      ESP_LOGI(TAG, "Telegram response: Found OK marker.");
                      finishedReading = true;
                 }
-                currentLineBuffer = ""; // Reset for the next line
+                currentLineBuffer = "";
             }
         } else {
-            if (finishedReading) { // If markers found and pipe is now empty, exit
-                break;
-            }
-            delay(5); // Small delay if pipe is temporarily empty but not finished reading
+            vTaskDelay(pdMS_TO_TICKS(1));
         }
     }
-
-    if (responseReadTimer.isReady() && !finishedReading) {
-        ESP_LOGW(TAG, "Telegram response: Timed out waiting for OK/ERROR markers. Sending what was received.");
-    } else if (finishedReading) {
-        ESP_LOGI(TAG, "Telegram response: Reading finished, markers detected.");
-    } else { 
-        ESP_LOGI(TAG, "Telegram response: Reading finished (pipe empty or other condition), no specific markers found before loop exit.");
+    
+    if (!finishedReading) {
+        ESP_LOGW(TAG, "Telegram response: Timed out waiting for OK/ERROR marker (>%lu ms)", READ_TIMEOUT_MS);
     }
     
-    responseMessage.trim(); // Remove leading/trailing whitespace
+    responseMessage.trim();
 
+    // Create response with new strings
+    TelegramResponse response;
+    response.chatId = new String(*msg.chatId);
+    
     if (responseMessage.length() > 0) {
-        ESP_LOGI(TAG, "Sending Telegram reply to %s: %s", chatId.c_str(), responseMessage.c_str());
-        sendSplitTelegramMessage(inst->controller->getTelegramBot(), chatId, responseMessage);
+        ESP_LOGI(TAG, "Queueing Telegram reply to %s: %s", msg.chatId->c_str(), responseMessage.c_str());
+        response.message = new String(responseMessage);
     } else {
         ESP_LOGI(TAG, "No explicit response (or only whitespace) for Telegram command: %s", commandText.c_str());
-        inst->controller->getTelegramBot().sendMessage(chatId, "Command processed, no specific output or only markers received.", "");
+        response.message = new String("Command processed, no specific output or only markers received.");
     }
-
-    if (writeTimer.isReady() || processTimer.isReady()) { // Check original timers for writing/processing
-        ESP_LOGW(TAG, "Telegram command writing to pipe or initial processing took too long.");
+    
+    // Send to queue and immediately clear local copy
+    if (xQueueSend(responseQueue, &response, 0) == pdPASS) {
+        ESP_LOGI(TAG, "Successfully queued response for chat ID: %s", msg.chatId->c_str());
+        response.chatId = nullptr;
+        response.message = nullptr;
+    } else {
+        ESP_LOGE(TAG, "Failed to queue response for chat ID: %s", msg.chatId->c_str());
+        delete response.chatId;
+        delete response.message;
     }
 }
 
@@ -610,10 +766,42 @@ static void sendSplitTelegramMessage(UniversalTelegramBot &bot, const String &ch
 {
     const size_t maxLen = TELEGRAM_MAX_MESSAGE; // 4096
     size_t total = message.length();
+    ESP_LOGD(TAG, "Sending message of %u characters to Telegram chat %s", (unsigned)total, chatId.c_str());
     for (size_t offset = 0; offset < total; offset += maxLen)
     {
         String chunk = message.substring(offset, std::min(offset + maxLen, total));
-        bot.sendMessage(chatId, chunk, "");
+        ESP_LOGD(TAG, "Chunk length after trim: %u", chunk.length());
+        String preview = chunk.substring(0, 50);
+        ESP_LOGD(TAG, "Chunk preview (escaped):");
+        for (size_t i = 0; i < preview.length(); ++i) {
+            char pc = preview[i];
+            if (pc == '\n') Serial.print("\\n");
+            else if (pc == '\r') Serial.print("\\r");
+            else Serial.print(pc);
+        }
+        Serial.println();
+
+        bool ok = bot.sendMessage(chatId, chunk, "");
+        if (!ok) {
+            ESP_LOGE(TAG, "bot.sendMessage failed; attempting retry. (No last_error available)");
+            // Retry once after encoding newlines, as Telegram API may reject raw newlines in urlencoded body
+            String encodedChunk = chunk;
+            encodedChunk.replace("%", "%25"); // pre-escape % first
+            encodedChunk.replace("+", "%2B"); // escape plus sign to avoid space conversion
+            encodedChunk.replace("\n", "%0A");
+            encodedChunk.replace("\r", "");
+            ESP_LOGW(TAG, "Retrying Telegram send after encoding newlines...");
+            ok = bot.sendMessage(chatId, encodedChunk, "");
+        }
+
+        if (ok)
+        {
+            ESP_LOGI(TAG, "Telegram chunk sent successfully (%u / %u)", (unsigned)std::min(offset + maxLen, total), (unsigned)total);
+        }
+        else
+        {
+            ESP_LOGE(TAG, "Failed to send Telegram chunk starting at character %u", (unsigned)offset);
+        }
         // Small delay to avoid hitting Telegram flood limits
         delay(20);
     }

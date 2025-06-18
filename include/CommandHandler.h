@@ -1,6 +1,13 @@
 #pragma once
 
 #include "Globals.h"
+#include "ComputerController.h"
+#include "StaticSerialCommands.h"
+#include "PipedStream.h"
+#include "SimpleTimer.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
 
 class ComputerController;
 
@@ -24,6 +31,19 @@ enum CommandType_t {
  */
 class CommandHandler {
 public:
+    // Message structure for the queue
+    struct TelegramMessage {
+        String *chatId;
+        String *text;
+        String *fromName;
+    };
+
+    // Response structure for the queue
+    struct TelegramResponse {
+        String *chatId;
+        String *message;
+    };
+
     /**
      * @brief Constructor for CommandHandler.
      * @param controller Pointer to the main ComputerController instance.
@@ -49,6 +69,12 @@ public:
      * Should be called regularly in the main program loop.
      */
     void loop();
+
+    /**
+     * @brief Process a single Telegram message.
+     * @param msg The Telegram message to process
+     */
+    void processTelegramMessage(const TelegramMessage& msg);
 
     /**
      * @brief Static callback for power command.
@@ -140,7 +166,7 @@ public:
      * @param count Pointer to a uint16_t to store the number of commands.
      * @return Pointer to the constant array of Command objects.
      */
-    static const Command* getCommands(uint16_t* count);
+    static const Command* getCommands(uint16_t* count = nullptr);
 
     /**
      * @brief Returns pointer to the associated ComputerController instance.
@@ -190,6 +216,16 @@ private:
     SimpleTimer<unsigned long> serialCheckTimer;         ///< Timer for polling serial input.
     SimpleTimer<unsigned long> telegramUpdateTimer; ///< Timer for polling Telegram updates.
 
+    // Task handle for Telegram processing
+    TaskHandle_t telegramTaskHandle;
+    // Queue for Telegram messages
+    QueueHandle_t telegramQueue;
+    // Queue for Telegram responses
+    QueueHandle_t responseQueue;
+    
+    // Task function for processing Telegram messages
+    static void telegramTaskFunction(void* parameter);
+
     /**
      * @brief Handles incoming serial commands.
      * Processes commands received through the serial interface.
@@ -203,13 +239,10 @@ private:
     void handleTelegramCommands();
 
     /**
-     * @brief Internal method to handle Telegram commands.
-     * Processes a specific Telegram message.
-     * @param chatId The Telegram chat ID
-     * @param text The message text
-     * @param fromName The name of the sender
+     * @brief Handles outgoing Telegram responses.
+     * Processes responses queued by the Telegram task.
      */
-    void handleTelegramCommandsInternal(const String &chatId, const String &text, const String &fromName);
+    void handleTelegramResponses();
 
     // Singleton instance
     static CommandHandler* instance;

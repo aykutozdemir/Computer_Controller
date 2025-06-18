@@ -8,11 +8,11 @@ static const char* TAG = "ComputerController";
 ComputerController::ComputerController() :
     telegramBot(BOT_TOKEN, telegramClient),
     commandHandler(nullptr),
-    wifiCheckTimer(5000),
-    debugTimer(1000),
-    displayUpdateTimer(100),
-    rfCheckTimer(50),
-    relayTimer(500),
+    wifiCheckTimer(WIFI_CHECK_INTERVAL),
+    debugTimer(DEBUG_OUTPUT_INTERVAL),
+    displayUpdateTimer(DISPLAY_UPDATE_INTERVAL),
+    rfCheckTimer(RF_CHECK_INTERVAL),
+    relayTimer(RELAY_TIMER_INTERVAL),
     display(),
     buzzer(BUZZER_PIN),
     buttons(BUTTON_PIN, buzzer),
@@ -30,6 +30,9 @@ ComputerController::ComputerController() :
     pinMode(RESET_RELAY_PIN, OUTPUT);
     digitalWrite(POWER_RELAY_PIN, HIGH);
     digitalWrite(RESET_RELAY_PIN, HIGH);
+
+    // Initialize PC power status pin
+    pinMode(PC_POWERED_ON_PIN, INPUT_PULLUP);
 
     // Set initial buzzer state from persistent settings
     buzzer.setEnabled(settings.isBuzzerEnabled());
@@ -61,9 +64,9 @@ void ComputerController::setup()
     try {
         display.begin();
         display.clear();
-        display.setTextSize(2);
+        display.setTextSize(DISPLAY_TEXT_SIZE_SMALL);
         display.setTextColor(DisplayColors::WHITE);
-        display.setCursor(10, 10);
+        display.setCursor(DISPLAY_CURSOR_X, DISPLAY_CURSOR_Y_START);
         display.println("Starting...");
         ESP_LOGI(TAG, "Display initialized successfully");
     } catch (...) {
@@ -71,7 +74,7 @@ void ComputerController::setup()
     }
     
     // Add delay after display initialization
-    delay(100);
+    delay(DISPLAY_INIT_DELAY_MS);
     
     // Initialize buzzer
     buzzer.begin();
@@ -109,11 +112,11 @@ void ComputerController::setup()
     xTaskCreatePinnedToCore(
         peripheralTaskRunner,     // Task function
         "PeripheralTask",       // Name of the task
-        4096,                   // Stack size in words
+        PERIPHERAL_TASK_STACK_SIZE,  // Stack size in words
         this,                   // Task input parameter
-        1,                      // Priority of the task
+        PERIPHERAL_TASK_PRIORITY,    // Priority of the task
         NULL,                   // Task handle
-        APP_CPU_NUM             // Core where the task should run
+        PERIPHERAL_TASK_CORE    // Core where the task should run
     );
 
     // Initial display update
@@ -124,7 +127,7 @@ void ComputerController::setup()
     esp_log_level_set("ssl_client", ESP_LOG_INFO);  // Set all tags to info level
 
     // Post setup
-    buzzer.beepPattern(2, 250, 250);
+    buzzer.beepPattern(2, BUZZER_PATTERN_INTERVAL_MS, BUZZER_PATTERN_INTERVAL_MS);
 
     gpuFan.begin();
 
@@ -233,51 +236,53 @@ void ComputerController::updateDisplay()
     display.clear();
     
     // Display WiFi status
-    display.setTextSize(2);
+    display.setTextSize(DISPLAY_TEXT_SIZE_SMALL);
     display.setTextColor(isConnected ? DisplayColors::GREEN : DisplayColors::YELLOW);
-    display.setCursor(10, 10);
+    display.setCursor(DISPLAY_CURSOR_X, DISPLAY_CURSOR_Y_START);
     display.print("WiFi: ");
     display.println(isConnected ? "Connected" : "Config Mode");
     
     if (isConnected) {
         // Display time
-        display.setTextSize(2);
+        display.setTextSize(DISPLAY_TEXT_SIZE_SMALL);
         display.setTextColor(DisplayColors::WHITE);
-        display.setCursor(10, 45);
+        display.setCursor(DISPLAY_CURSOR_X, DISPLAY_CURSOR_Y_START + DISPLAY_LINE_SPACING);
         display.print("Time: ");
         display.println(rtc.getTime().c_str());
         
         // Display IP address
-        display.setCursor(10, 70);
+        display.setCursor(DISPLAY_CURSOR_X, DISPLAY_CURSOR_Y_START + DISPLAY_LINE_SPACING * 2);
         display.print("IP: ");
         display.println(WiFi.localIP().toString().c_str());
         
         // Display RSSI (signal strength)
         char rssiStr[10];
         snprintf(rssiStr, sizeof(rssiStr), "%d dBm", WiFi.RSSI());
-        display.setCursor(10, 95);
+        display.setCursor(DISPLAY_CURSOR_X, DISPLAY_CURSOR_Y_START + DISPLAY_LINE_SPACING * 3);
         display.print("Signal: ");
         display.println(rssiStr);
         
         // Display uptime
         char uptimeStr[20];
         snprintf(uptimeStr, sizeof(uptimeStr), "%lu s", millis() / 1000);
-        display.setCursor(10, 120);
+        display.setCursor(DISPLAY_CURSOR_X, DISPLAY_CURSOR_Y_START + DISPLAY_LINE_SPACING * 4);
         display.print("Uptime: ");
         display.println(uptimeStr);
     } else {
         // Show configuration instructions
-        display.setTextSize(2);
+        display.setTextSize(DISPLAY_TEXT_SIZE_SMALL);
         display.setTextColor(DisplayColors::WHITE);
-        display.setCursor(10, 45);
+        display.setCursor(DISPLAY_CURSOR_X, DISPLAY_CURSOR_Y_START + DISPLAY_LINE_SPACING);
         display.println("Connect to:");
-        display.setCursor(10, 70);
-        display.println("SSID: ComputerController");
-        display.setCursor(10, 95);
-        display.println("Password: 12345678");
-        display.setCursor(10, 120);
+        display.setCursor(DISPLAY_CURSOR_X, DISPLAY_CURSOR_Y_START + DISPLAY_LINE_SPACING * 2);
+        display.print("SSID: ");
+        display.println(WIFI_AP_NAME);
+        display.setCursor(DISPLAY_CURSOR_X, DISPLAY_CURSOR_Y_START + DISPLAY_LINE_SPACING * 3);
+        display.print("Password: ");
+        display.println(WIFI_AP_PASSWORD);
+        display.setCursor(DISPLAY_CURSOR_X, DISPLAY_CURSOR_Y_START + DISPLAY_LINE_SPACING * 4);
         display.println("Then open:");
-        display.setCursor(10, 145);
+        display.setCursor(DISPLAY_CURSOR_X, DISPLAY_CURSOR_Y_START + DISPLAY_LINE_SPACING * 5);
         display.println("http://192.168.4.1");
     }
 }
@@ -291,22 +296,22 @@ void ComputerController::connectWiFi()
     
     // Clear display and show initial message
     display.clear();
-    display.setTextSize(3);
+    display.setTextSize(DISPLAY_TEXT_SIZE_LARGE);
     display.setTextColor(DisplayColors::WHITE);
-    display.setCursor(10, 10);
+    display.setCursor(DISPLAY_CURSOR_X, DISPLAY_CURSOR_Y_START);
     display.println("WiFi Setup");
-    display.setTextSize(2);
-    display.setCursor(10, 45);
+    display.setTextSize(DISPLAY_TEXT_SIZE_SMALL);
+    display.setCursor(DISPLAY_CURSOR_X, DISPLAY_CURSOR_Y_START + DISPLAY_LINE_SPACING);
     display.println("Connecting to WiFi...");
     
     // Configure WiFiManager with custom settings
-    wifiManager.setConfigPortalTimeout(180); // 3 minute timeout for configuration
-    wifiManager.setConnectTimeout(20);      // 20 second connection timeout
+    wifiManager.setConfigPortalTimeout(WIFI_CONFIG_PORTAL_TIMEOUT);
+    wifiManager.setConnectTimeout(WIFI_CONNECT_TIMEOUT_SECONDS);
     wifiManager.setBreakAfterConfig(true);  // Exit after configuration
     
     // Set custom AP name and password
-    const char* apName = "ComputerController";
-    const char* apPassword = "12345678";  // 8 character minimum for WPA2
+    const char* apName = WIFI_AP_NAME;
+    const char* apPassword = WIFI_AP_PASSWORD;
     
     // Configure WiFiManager with custom AP settings
     wifiManager.setHostname(apName);
@@ -317,29 +322,29 @@ void ComputerController::connectWiFi()
         isConnected = true;
         led.setStatus(LedController::Status::CONNECTED); // WiFi is connected
         display.clear();
-        display.setTextSize(3);
+        display.setTextSize(DISPLAY_TEXT_SIZE_LARGE);
         display.setTextColor(DisplayColors::GREEN);
-        display.setCursor(10, 10);
+        display.setCursor(DISPLAY_CURSOR_X, DISPLAY_CURSOR_Y_START);
         display.println("WiFi Connected!");
-        display.setTextSize(2);
-        display.setCursor(10, 45);
+        display.setTextSize(DISPLAY_TEXT_SIZE_SMALL);
+        display.setCursor(DISPLAY_CURSOR_X, DISPLAY_CURSOR_Y_START + DISPLAY_LINE_SPACING);
         display.print("IP: ");
         display.println(WiFi.localIP().toString().c_str());
         ESP_LOGI(TAG, "WiFi connected successfully");
         
         // Configure SSL client for Telegram
         telegramClient.setInsecure(); // Skip certificate verification
-        telegramClient.setTimeout(4000); // 4 second timeout
+        telegramClient.setTimeout(TELEGRAM_TIMEOUT);
     } else {
         isConnected = false;
         // LED remains in CONNECTING state (blinking) for AP/Config mode
         display.clear();
-        display.setTextSize(3);
+        display.setTextSize(DISPLAY_TEXT_SIZE_LARGE);
         display.setTextColor(DisplayColors::YELLOW);
-        display.setCursor(10, 10);
+        display.setCursor(DISPLAY_CURSOR_X, DISPLAY_CURSOR_Y_START);
         display.println("WiFi Config");
-        display.setTextSize(2);
-        display.setCursor(10, 45);
+        display.setTextSize(DISPLAY_TEXT_SIZE_SMALL);
+        display.setCursor(DISPLAY_CURSOR_X, DISPLAY_CURSOR_Y_START + DISPLAY_LINE_SPACING);
         display.println("Connect to:");
         ESP_LOGE(TAG, "WiFi connection failed");
     }
@@ -351,7 +356,7 @@ void ComputerController::handlePowerResetButtons()
     if (currentRelayState == RelayState::IDLE) {
         // Handle power button
         if (powerReset.isPowerPressed()) {
-            buzzer.beep(100); // always beep on power button press
+            buzzer.beep(BUZZER_BEEP_DURATION_MS); // always beep on power button press
             if (!PersistentSettings::getInstance().isChildLockEnabled()) {
                 ESP_LOGI(TAG, "Power button pressed");
                 currentRelayState = RelayState::POWER_PRESSING;
@@ -363,7 +368,7 @@ void ComputerController::handlePowerResetButtons()
         }
         // Handle reset button
         else if (powerReset.isResetPressed()) {
-            buzzer.beep(100); // always beep on reset button press
+            buzzer.beep(BUZZER_BEEP_DURATION_MS); // always beep on reset button press
             if (!PersistentSettings::getInstance().isChildLockEnabled()) {
                 ESP_LOGI(TAG, "Reset button pressed");
                 currentRelayState = RelayState::RESET_PRESSING;
@@ -404,7 +409,7 @@ void ComputerController::setPowerRelay(bool state)
 {
     digitalWrite(POWER_RELAY_PIN, state ? LOW : HIGH);
     if (state) {
-        buzzer.beep(100); // Short beep when activating power relay
+        buzzer.beep(BUZZER_BEEP_DURATION_MS); // Short beep when activating power relay
     }
     ESP_LOGI(TAG, "Power relay %s (Pin State: %s)", state ? "ACTIVATED" : "DEACTIVATED", state ? "LOW" : "HIGH");
 }
@@ -413,7 +418,7 @@ void ComputerController::setResetRelay(bool state)
 {
     digitalWrite(RESET_RELAY_PIN, state ? LOW : HIGH);
     if (state) {
-        buzzer.beep(100); // Short beep when activating reset relay
+        buzzer.beep(BUZZER_BEEP_DURATION_MS); // Short beep when activating reset relay
     }
     ESP_LOGI(TAG, "Reset relay %s (Pin State: %s)", state ? "ACTIVATED" : "DEACTIVATED", state ? "LOW" : "HIGH");
 }
@@ -457,7 +462,7 @@ void ComputerController::handleFactoryReset() {
     ESP_LOGI(TAG, "Factory reset triggered by button press");
     
     // Play triple beep to indicate factory reset
-    buzzer.beepPattern(3, 200, 100);
+    buzzer.beepPattern(BUZZER_FACTORY_RESET_BEEPS, BUZZER_FACTORY_RESET_DURATION_MS, BUZZER_FACTORY_RESET_INTERVAL_MS);
     delay(300); // Wait for beeps to complete
     
     // Clear all settings

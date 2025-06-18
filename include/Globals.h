@@ -56,12 +56,14 @@ static constexpr uint32_t ESP32_FLASH_FREQ = 80000000L; // Flash frequency in Hz
 
 // Serial Configuration
 static constexpr uint32_t SERIAL_BAUD_RATE = 115200;
+static constexpr uint32_t SERIAL_CHECK_INTERVAL = 10;  // Check serial every 10ms
 
 // Pin Definitions
 static constexpr uint8_t POWER_BUTTON_PIN = 34;
 static constexpr uint8_t RESET_BUTTON_PIN = 39;
 static constexpr uint8_t POWER_RELAY_PIN = 25;
 static constexpr uint8_t RESET_RELAY_PIN = 26;
+static constexpr uint8_t PC_POWERED_ON_PIN = 5;
 static constexpr uint8_t BUZZER_PIN = 27;
 static constexpr uint8_t BUTTON_PIN = SDA;
 static constexpr uint8_t LED_PIN = 16;
@@ -119,22 +121,20 @@ static constexpr uint32_t PERIPHERAL_TASK_STACK_SIZE = 4096;  // Stack size for 
 static constexpr uint8_t PERIPHERAL_TASK_PRIORITY = 1;        // Priority of peripheral task
 static constexpr uint8_t PERIPHERAL_TASK_CORE = APP_CPU_NUM;  // Core to run peripheral task on
 
-// Constants
-static constexpr uint16_t RELAY_BUTTON_PRESS_DURATION = 500;
-
 // Timer Intervals (in milliseconds)
 static constexpr uint16_t WIFI_CHECK_INTERVAL = 5000;     // WiFi status check interval
 static constexpr uint16_t DEBUG_OUTPUT_INTERVAL = 1000;   // Debug output interval
 static constexpr uint16_t DISPLAY_UPDATE_INTERVAL = 100;  // Display refresh interval
 static constexpr uint16_t RF_CHECK_INTERVAL = 50;         // RF receiver check interval
-static constexpr uint16_t RELAY_TIMER_INTERVAL = 500;     // Relay press duration
-static constexpr uint16_t SERIAL_CHECK_INTERVAL = 5;      // Serial input check interval (faster polling)
+static constexpr uint16_t RELAY_TIMER_INTERVAL = 2000;     // Relay press duration
 static constexpr uint16_t MESSAGE_CHECK_INTERVAL = 300;   // Telegram message check interval (faster polling)
 static constexpr uint16_t RF_REPEAT_DELAY = 300;         // Minimum delay between RF code repeats
 static constexpr uint32_t WIFI_CONFIG_TIMEOUT = 180000;   // WiFi config portal timeout (3 minutes)
 static constexpr uint16_t WIFI_CONNECT_TIMEOUT = 20000;   // WiFi connection timeout (20 seconds)
 static constexpr uint16_t TELEGRAM_TIMEOUT = 4000;        // Telegram client timeout (4 seconds)
+static constexpr uint16_t READ_TIMEOUT_MS = 3000;         // Timeout for reading command responses (3 second)
 static constexpr size_t TELEGRAM_MAX_MESSAGE = 4096;      // Maximum length of a Telegram message
+static constexpr uint16_t DISPLAY_INIT_DELAY_MS = 50;     // Delay after display initialization
 
 // Button Press Durations (in milliseconds)
 static constexpr uint16_t SHORT_PRESS_DURATION = 50;    // Minimum duration for a valid press
@@ -152,6 +152,29 @@ static constexpr const char* NVS_KEY_CHILD_LOCK = "child_lock"; // Key for stori
 static constexpr const char* NVS_KEY_BUZZER_ENABLED = "buzzer_enabled"; // Key for storing buzzer state
 static constexpr const char* NVS_KEY_RF_ENABLED = "rf_enabled";
 static constexpr const char* NVS_KEY_RF_BUTTON_CODE = "rf_button_code"; // Key for storing RF button code
+
+// WiFi Configuration
+static constexpr const char* WIFI_AP_NAME = "ComputerController";
+static constexpr const char* WIFI_AP_PASSWORD = "12345678";  // 8 character minimum for WPA2
+static constexpr uint16_t WIFI_CONFIG_PORTAL_TIMEOUT = 180;  // 3 minute timeout for configuration
+static constexpr uint16_t WIFI_CONNECT_TIMEOUT_SECONDS = 20; // 20 second connection timeout
+
+// Buzzer Configuration
+static constexpr uint16_t BUZZER_BEEP_DURATION_MS = 100;     // Duration of a single beep
+static constexpr uint16_t BUZZER_PATTERN_INTERVAL_MS = 250;  // Interval between beeps in a pattern
+static constexpr uint16_t BUZZER_FACTORY_RESET_BEEPS = 3;    // Number of beeps for factory reset
+static constexpr uint16_t BUZZER_FACTORY_RESET_DURATION_MS = 200;  // Duration of factory reset beeps
+static constexpr uint16_t BUZZER_FACTORY_RESET_INTERVAL_MS = 100;  // Interval between factory reset beeps
+
+// Display Text Configuration
+static constexpr uint8_t DISPLAY_TEXT_SIZE_SMALL = 2;
+static constexpr uint8_t DISPLAY_TEXT_SIZE_LARGE = 3;
+static constexpr uint16_t DISPLAY_CURSOR_X = 10;
+static constexpr uint16_t DISPLAY_CURSOR_Y_START = 10;
+static constexpr uint16_t DISPLAY_LINE_SPACING = 25;
+
+// RF Configuration
+static constexpr uint8_t RF_RECEIVE_TOLERANCE = 80;      // Tolerance percentage for RF signal reception
 
 // Utility Functions
 inline void usDelay(uint32_t us) {

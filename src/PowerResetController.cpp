@@ -4,8 +4,8 @@ PowerResetController::PowerResetController() :
     powerButton(POWER_BUTTON_PIN, INPUT_PULLUP),
     resetButton(RESET_BUTTON_PIN, INPUT_PULLUP) {
     // Set debounce time for both buttons
-    powerButton.setDebounceTime(50);
-    resetButton.setDebounceTime(50);
+    powerButton.setDebounceTime(DEBOUNCE_TIME);
+    resetButton.setDebounceTime(DEBOUNCE_TIME);
     
     // Set count mode for both buttons
     powerButton.setCountMode(COUNT_FALLING);
