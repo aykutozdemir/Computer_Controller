@@ -16,11 +16,7 @@
 #include <Preferences.h>
 
 // Sensor Libraries
-#include <Adafruit_Sensor.h>
-#include <Adafruit_AHTX0.h>
-#include <Adafruit_BMP280.h>
-#include <AHT20Sensor.h>
-#include <BMP280Sensor.h>
+#include <DHT11Sensor.h>
 
 // Common Utility & Helper Libraries
 #include <LoopbackStream.h>
@@ -67,11 +63,12 @@ static constexpr uint8_t RESET_BUTTON_PIN = 39;
 static constexpr uint8_t POWER_RELAY_PIN = 25;
 static constexpr uint8_t RESET_RELAY_PIN = 26;
 static constexpr uint8_t BUZZER_PIN = 27;
-static constexpr uint8_t BUTTON_PIN = 14;
+static constexpr uint8_t BUTTON_PIN = SDA;
 static constexpr uint8_t LED_PIN = 16;
 static constexpr uint8_t GPU_FAN_CONTROL_PIN = 17;
 static constexpr uint8_t GPU_FAN_PWM_PIN = 36;
 static constexpr uint8_t RF_INPUT_PIN = 35;
+static constexpr uint8_t DHT11_PIN = SCL;
 
 // Button beep timing constants
 static constexpr uint16_t BUTTON_PRESS_BEEP_DURATION_MS = 250;  // Duration of button press beep

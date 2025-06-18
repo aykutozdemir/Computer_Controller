@@ -1,5 +1,6 @@
 #include "ComputerController.h" 
 #include "Credentials.h"
+#include <Wire.h>
 
 // Define log tag
 static const char* TAG = "ComputerController";
@@ -22,8 +23,7 @@ ComputerController::ComputerController() :
     settings(PersistentSettings::getInstance()),
     currentRelayState(RelayState::IDLE),
     gpuFan(GPU_FAN_CONTROL_PIN, GPU_FAN_PWM_PIN, GPU_FAN_PWM_FREQ, GPU_FAN_PWM_RESOLUTION),
-    aht20(),
-    bmp280()
+    dht11(DHT11_PIN)
 {
     // Initialize relay pins
     pinMode(POWER_RELAY_PIN, OUTPUT);
@@ -128,17 +128,13 @@ void ComputerController::setup()
 
     gpuFan.begin();
 
-    // Initialise environmental sensors
-    if (aht20.begin()) {
-        ESP_LOGI(TAG, "AHT20 sensor initialised");
-    } else {
-        ESP_LOGW(TAG, "AHT20 sensor not found or failed to initialise");
-    }
+    Wire.end();
 
-    if (bmp280.begin()) {
-        ESP_LOGI(TAG, "BMP280 sensor initialised");
+    // Initialise environmental sensors
+    if (dht11.begin()) {
+        ESP_LOGI(TAG, "DHT11 sensor initialised");
     } else {
-        ESP_LOGW(TAG, "BMP280 sensor not found or failed to initialise");
+        ESP_LOGW(TAG, "DHT11 sensor not found or failed to initialise");
     }
 }
 
@@ -154,8 +150,7 @@ void ComputerController::peripheralTaskRunner(void* pvParameters) {
         instance->buzzer.loop();
         instance->led.loop();
         instance->gpuFan.loop();
-        instance->aht20.loop();
-        instance->bmp280.loop();
+        instance->dht11.loop();
 
         // Process RF study
         instance->rfStudyManager.process();
@@ -356,6 +351,7 @@ void ComputerController::handlePowerResetButtons()
     if (currentRelayState == RelayState::IDLE) {
         // Handle power button
         if (powerReset.isPowerPressed()) {
+            buzzer.beep(100); // always beep on power button press
             if (!PersistentSettings::getInstance().isChildLockEnabled()) {
                 ESP_LOGI(TAG, "Power button pressed");
                 currentRelayState = RelayState::POWER_PRESSING;
@@ -367,6 +363,7 @@ void ComputerController::handlePowerResetButtons()
         }
         // Handle reset button
         else if (powerReset.isResetPressed()) {
+            buzzer.beep(100); // always beep on reset button press
             if (!PersistentSettings::getInstance().isChildLockEnabled()) {
                 ESP_LOGI(TAG, "Reset button pressed");
                 currentRelayState = RelayState::RESET_PRESSING;
@@ -406,12 +403,18 @@ void ComputerController::updateRelayState()
 void ComputerController::setPowerRelay(bool state)
 {
     digitalWrite(POWER_RELAY_PIN, state ? LOW : HIGH);
+    if (state) {
+        buzzer.beep(100); // Short beep when activating power relay
+    }
     ESP_LOGI(TAG, "Power relay %s (Pin State: %s)", state ? "ACTIVATED" : "DEACTIVATED", state ? "LOW" : "HIGH");
 }
 
 void ComputerController::setResetRelay(bool state)
 {
     digitalWrite(RESET_RELAY_PIN, state ? LOW : HIGH);
+    if (state) {
+        buzzer.beep(100); // Short beep when activating reset relay
+    }
     ESP_LOGI(TAG, "Reset relay %s (Pin State: %s)", state ? "ACTIVATED" : "DEACTIVATED", state ? "LOW" : "HIGH");
 }
 

@@ -1,4 +1,5 @@
 #include "CommandHandler.h"
+#include <algorithm> // for std::min
 
 // Define log tag
 static const char* TAG = "CommandHandler";
@@ -10,6 +11,9 @@ CommandHandler* CommandHandler::instance = nullptr;
 // Create larger buffers for command processing
 EXT_RAM_ATTR static char serialBuffer[4096];
 EXT_RAM_ATTR static char telegramBuffer[4096];
+
+// Forward declaration
+static void sendSplitTelegramMessage(UniversalTelegramBot &bot, const String &chatId, const String &message);
 
 // Define command handlers as regular functions
 void cmdHelp(SerialCommands& sender, Args& args) {
@@ -55,8 +59,6 @@ void cmdStatus(SerialCommands& sender, Args& args) {
 
     String temperatureStr = appendValue(inst->getControllerInstance()->getAmbientTemperature(), "C");
     String humidityStr    = appendValue(inst->getControllerInstance()->getRelativeHumidity(), "%");
-    String pressureStr    = appendValue(inst->getControllerInstance()->getBarometricPressure() / 100.0f, "hPa"); // convert Pa→hPa
-    String altitudeStr    = appendValue(inst->getControllerInstance()->getAltitude(), "m");
 
     String responseMsg = "Status:\n";
     responseMsg += "- WiFi: " + wifiStatus + "\n";
@@ -67,8 +69,6 @@ void cmdStatus(SerialCommands& sender, Args& args) {
     responseMsg += "- GPU Fan: " + gpuFanSpeed + " (" + gpuFanRPM + ")\n";
     responseMsg += "- Temperature: " + temperatureStr + "\n";
     responseMsg += "- Humidity: " + humidityStr + "\n";
-    responseMsg += "- Pressure: " + pressureStr + "\n";
-    responseMsg += "- Altitude: " + altitudeStr + "\n";
     responseMsg += "- Free Heap: " + freeHeap + " bytes";
 
     sender.getSerial().println(responseMsg);
@@ -478,6 +478,7 @@ void CommandHandler::handleTelegramCommandsInternal(const String &chatId, const 
     if (commandText.startsWith("/")) {
         commandText.remove(0, 1); // Remove the leading '/'
     }
+    commandText.toLowerCase(); // Convert command to lowercase for case-insensitive matching
 
     ESP_LOGI(TAG, "Telegram msg from %s (%s): %s (processed: %s)", fromName.c_str(), chatId.c_str(), text.c_str(), commandText.c_str());
 
@@ -556,8 +557,7 @@ void CommandHandler::handleTelegramCommandsInternal(const String &chatId, const 
 
     if (responseMessage.length() > 0) {
         ESP_LOGI(TAG, "Sending Telegram reply to %s: %s", chatId.c_str(), responseMessage.c_str());
-        // Note: Telegram messages have a max length of 4096 chars. Truncate if necessary.
-        inst->controller->getTelegramBot().sendMessage(chatId, responseMessage, "");
+        sendSplitTelegramMessage(inst->controller->getTelegramBot(), chatId, responseMessage);
     } else {
         ESP_LOGI(TAG, "No explicit response (or only whitespace) for Telegram command: %s", commandText.c_str());
         inst->controller->getTelegramBot().sendMessage(chatId, "Command processed, no specific output or only markers received.", "");
@@ -600,11 +600,21 @@ void CommandHandler::flush(SerialCommands &sender) {
         return;
     }
 
-    // Truncate if needed
-    if (message.length() > TELEGRAM_MAX_MESSAGE) {
-        message = message.substring(0, TELEGRAM_MAX_MESSAGE);
-    }
+    // Send via Telegram bot, split into chunks if necessary
+    sendSplitTelegramMessage(controller->getTelegramBot(), chatId, message);
+}
 
-    // Send via Telegram bot
-    controller->getTelegramBot().sendMessage(chatId, message, "");
+// Helper that sends a long message to Telegram by splitting it into chunks that
+// respect Telegram's maximum message length (defined in Globals.h).
+static void sendSplitTelegramMessage(UniversalTelegramBot &bot, const String &chatId, const String &message)
+{
+    const size_t maxLen = TELEGRAM_MAX_MESSAGE; // 4096
+    size_t total = message.length();
+    for (size_t offset = 0; offset < total; offset += maxLen)
+    {
+        String chunk = message.substring(offset, std::min(offset + maxLen, total));
+        bot.sendMessage(chatId, chunk, "");
+        // Small delay to avoid hitting Telegram flood limits
+        delay(20);
+    }
 }

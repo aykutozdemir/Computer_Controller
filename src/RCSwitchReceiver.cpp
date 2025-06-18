@@ -7,6 +7,7 @@ RCSwitchReceiver::RCSwitchReceiver(uint8_t interruptPin)
 void RCSwitchReceiver::begin() {
     // The RCSwitch library expects Interrupt numbers rather than raw GPIOs
     rcSwitch.enableReceive(digitalPinToInterrupt(interruptPin));
+    rcSwitch.setReceiveTolerance(40);
 }
 
 bool RCSwitchReceiver::read() {

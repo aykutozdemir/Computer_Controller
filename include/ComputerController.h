@@ -117,25 +117,13 @@ public:
      * @brief Returns the most recent ambient temperature value.
      * @return Temperature in °C, or NAN if not available.
      */
-    float getAmbientTemperature() const { return aht20.getTemperature(); }
+    float getAmbientTemperature() const { return dht11.getTemperature(); }
 
     /**
      * @brief Returns the most recent relative-humidity value.
      * @return Humidity in percent, or NAN if not available.
      */
-    float getRelativeHumidity() const { return aht20.getHumidity(); }
-
-    /**
-     * @brief Returns the most recent barometric pressure.
-     * @return Pressure in Pascals, or NAN if not available.
-     */
-    float getBarometricPressure() const { return bmp280.getPressure(); }
-
-    /**
-     * @brief Returns the most recent altitude calculated from pressure.
-     * @return Altitude in metres, or NAN if not available.
-     */
-    float getAltitude() const { return bmp280.getAltitude(); }
+    float getRelativeHumidity() const { return dht11.getHumidity(); }
 
 private:
     // Command channels
@@ -166,8 +154,7 @@ private:
     FanController gpuFan;                   ///< GPU fan controller
 
     // Environmental sensors
-    AHT20Sensor aht20;                      ///< Temperature/Humidity sensor
-    BMP280Sensor bmp280;                    ///< Pressure/Temperature sensor
+    DHT11Sensor dht11;                      ///< Temperature/Humidity sensor (DHT11)
 
     bool isConnected = false;               ///< Flag indicating WiFi connection status.
     
