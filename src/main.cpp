@@ -6,6 +6,9 @@ static const char* TAG = "main";
 // Global pointer to the ComputerController instance
 static ComputerController* controller = nullptr;
 
+// Global pointer for MQTT manager access
+ComputerController* g_computerController = nullptr;
+
 /**
  * @brief Setup function, called once at startup.
  * 
@@ -24,6 +27,7 @@ void setup() {
     
     // Create and setup the main controller
     controller = new ComputerController();
+    g_computerController = controller;  // Assign to global pointer for MQTT access
     controller->setup();
     
     ESP_LOGI(TAG, "Initialization complete");

@@ -28,6 +28,11 @@ public:
      */
     void setChildLockEnabled(bool enabled);
     
+    /**
+     * @brief Toggles the child lock state (enabled becomes disabled, disabled becomes enabled).
+     */
+    void toggleChildLock();
+    
     // Buzzer settings
     /**
      * @brief Checks if the buzzer is currently enabled.
@@ -40,6 +45,11 @@ public:
      * @param enabled True to enable buzzer, false to disable.
      */
     void setBuzzerEnabled(bool enabled);
+
+    /**
+     * @brief Toggles the buzzer state (enabled becomes disabled, disabled becomes enabled).
+     */
+    void toggleBuzzer();
 
     /**
      * @brief Gets the stored RF button code.

@@ -47,6 +47,11 @@ void PersistentSettings::setChildLockEnabled(bool enabled) {
     }
 }
 
+void PersistentSettings::toggleChildLock() {
+    bool currentState = isChildLockEnabled();
+    setChildLockEnabled(!currentState);
+}
+
 bool PersistentSettings::isBuzzerEnabled() {
     return preferences.getBool(NVS_KEY_BUZZER_ENABLED, true); // Default to true if not set
 }
@@ -55,6 +60,11 @@ void PersistentSettings::setBuzzerEnabled(bool enabled) {
     if (!preferences.putBool(NVS_KEY_BUZZER_ENABLED, enabled)) {
         Serial.println("Failed to save buzzer setting");
     }
+}
+
+void PersistentSettings::toggleBuzzer() {
+    bool currentState = isBuzzerEnabled();
+    setBuzzerEnabled(!currentState);
 }
 
 bool PersistentSettings::isRFEnabled() {

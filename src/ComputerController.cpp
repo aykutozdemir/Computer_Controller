@@ -8,11 +8,12 @@ static const char* TAG = "ComputerController";
 ComputerController::ComputerController() :
     telegramBot(BOT_TOKEN, telegramClient),
     commandHandler(nullptr),
+    webServer(nullptr),
     wifiCheckTimer(WIFI_CHECK_INTERVAL),
     debugTimer(DEBUG_OUTPUT_INTERVAL),
     displayUpdateTimer(DISPLAY_UPDATE_INTERVAL),
     rfCheckTimer(RF_CHECK_INTERVAL),
-    relayTimer(RELAY_TIMER_INTERVAL),
+    relayTimer(0),  // Initialize with 0 interval to prevent immediate start
     display(),
     buzzer(BUZZER_PIN),
     buttons(BUTTON_PIN, buzzer),
@@ -25,6 +26,8 @@ ComputerController::ComputerController() :
     gpuFan(GPU_FAN_CONTROL_PIN, GPU_FAN_PWM_PIN, GPU_FAN_PWM_FREQ, GPU_FAN_PWM_RESOLUTION),
     dht11(DHT11_PIN)
 {
+    ESP_LOGI(TAG, "Initializing ComputerController with bot token: %s", BOT_TOKEN);
+    
     // Initialize relay pins
     pinMode(POWER_RELAY_PIN, OUTPUT);
     pinMode(RESET_RELAY_PIN, OUTPUT);
@@ -108,6 +111,15 @@ void ComputerController::setup()
     commandHandler->setup();
     ESP_LOGI(TAG, "CommandHandler initialized");
     
+    // Initialize WebServerManager
+    webServer = new WebServerManager(*this);
+    webServer->begin();
+    ESP_LOGI(TAG, "WebServerManager initialized");
+    
+    // Initialize MQTT manager
+    mqttManager.begin();
+    ESP_LOGI(TAG, "MQTT manager initialized");
+    
     // Create peripheral handling task
     xTaskCreatePinnedToCore(
         peripheralTaskRunner,     // Task function
@@ -169,6 +181,14 @@ void ComputerController::loop()
     if (commandHandler) {
         commandHandler->loop();
     }
+
+    // Handle web server
+    if (webServer) {
+        webServer->loop();
+    }
+
+    // Handle MQTT manager
+    mqttManager.loop();
 
     // Check button state and trace
     // This logging remains in the main loop. It reads the state updated by peripheralTaskRunner.
@@ -361,7 +381,6 @@ void ComputerController::handlePowerResetButtons()
                 ESP_LOGI(TAG, "Power button pressed");
                 currentRelayState = RelayState::POWER_PRESSING;
                 setPowerRelay(true);
-                relayTimer.reset();
             } else {
                 ESP_LOGW(TAG, "Power button press ignored, child lock enabled.");
             }
@@ -373,7 +392,6 @@ void ComputerController::handlePowerResetButtons()
                 ESP_LOGI(TAG, "Reset button pressed");
                 currentRelayState = RelayState::RESET_PRESSING;
                 setResetRelay(true);
-                relayTimer.reset();
             } else {
                 ESP_LOGW(TAG, "Reset button press ignored, child lock enabled.");
             }
@@ -383,30 +401,39 @@ void ComputerController::handlePowerResetButtons()
 
 void ComputerController::updateRelayState()
 {
-    // Check if relay timer has expired
-    if (relayTimer.isReady()) {
+    // Only check timer if it's enabled (has a non-zero interval)
+    if (relayTimer.isEnabled() && relayTimer.isReady()) {
         switch (currentRelayState) {
             case RelayState::POWER_PRESSING:
                 setPowerRelay(false);
                 currentRelayState = RelayState::IDLE;
-                ESP_LOGI(TAG, "Power relay released");
+                ESP_LOGI(TAG, "Power relay released after %d ms", RELAY_TIMER_INTERVAL);
                 break;
                 
             case RelayState::RESET_PRESSING:
                 setResetRelay(false);
                 currentRelayState = RelayState::IDLE;
-                ESP_LOGI(TAG, "Reset relay released");
+                ESP_LOGI(TAG, "Reset relay released after %d ms", RELAY_TIMER_INTERVAL);
                 break;
                 
             case RelayState::IDLE:
                 // Nothing to do
                 break;
         }
+    } else {
+        // Debug: log when timer is not ready
+        static unsigned long lastDebugTime = 0;
+        if (currentRelayState != RelayState::IDLE && millis() - lastDebugTime > 1000) {
+            ESP_LOGI(TAG, "Timer not ready yet, state: %d, interval: %d", (int)currentRelayState, relayTimer.getInterval());
+            lastDebugTime = millis();
+        }
     }
 }
 
 void ComputerController::setPowerRelay(bool state)
 {
+    relayTimer.setInterval(RELAY_TIMER_INTERVAL);
+    relayTimer.reset();
     digitalWrite(POWER_RELAY_PIN, state ? LOW : HIGH);
     if (state) {
         buzzer.beep(BUZZER_BEEP_DURATION_MS); // Short beep when activating power relay
@@ -416,6 +443,8 @@ void ComputerController::setPowerRelay(bool state)
 
 void ComputerController::setResetRelay(bool state)
 {
+    relayTimer.setInterval(RELAY_TIMER_INTERVAL);
+    relayTimer.reset();
     digitalWrite(RESET_RELAY_PIN, state ? LOW : HIGH);
     if (state) {
         buzzer.beep(BUZZER_BEEP_DURATION_MS); // Short beep when activating reset relay
@@ -427,8 +456,12 @@ void ComputerController::activatePowerRelay() {
     if (currentRelayState == RelayState::IDLE) {
         ESP_LOGI(TAG, "Activating power relay via command/external call");
         currentRelayState = RelayState::POWER_PRESSING;
-        setPowerRelay(true); // Activate relay
-        relayTimer.reset();  // Start timer for deactivation
+        setPowerRelay(true);
+        ESP_LOGI(TAG, "Resetting relay timer for %d ms", RELAY_TIMER_INTERVAL);
+        ESP_LOGI(TAG, "Power relay activated, timer started for %d ms", RELAY_TIMER_INTERVAL);
+        
+        // Publish MQTT event
+        mqttManager.publishEvent("power_relay_activated", "via_command");
     } else {
         ESP_LOGW(TAG, "Cannot activate power relay, another relay operation is in progress.");
     }
@@ -438,8 +471,11 @@ void ComputerController::activateResetRelay() {
     if (currentRelayState == RelayState::IDLE) {
         ESP_LOGI(TAG, "Activating reset relay via command/external call");
         currentRelayState = RelayState::RESET_PRESSING;
-        setResetRelay(true); // Activate relay
-        relayTimer.reset();  // Start timer for deactivation
+        setResetRelay(true);
+        ESP_LOGI(TAG, "Reset relay activated, timer started for %d ms", RELAY_TIMER_INTERVAL);
+        
+        // Publish MQTT event
+        mqttManager.publishEvent("reset_relay_activated", "via_command");
     } else {
         ESP_LOGW(TAG, "Cannot activate reset relay, another relay operation is in progress.");
     }

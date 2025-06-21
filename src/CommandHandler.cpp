@@ -1,4 +1,5 @@
 #include "CommandHandler.h"
+#include "Credentials.h"
 #include <algorithm> // for std::min
 #include "Globals.h"
 #include <Arduino.h>
@@ -381,6 +382,7 @@ CommandHandler::CommandHandler(ComputerController* controller)
     CommandHandler::instance = this;
 
     ESP_LOGI(TAG, "Initializing CommandHandler");
+    ESP_LOGI(TAG, "Configured chat ID: %s", CHAT_ID);
     
     // Create queue for Telegram messages
     telegramQueue = xQueueCreate(10, sizeof(TelegramMessage));
@@ -514,16 +516,44 @@ void CommandHandler::handleTelegramCommands()
     telegramUpdateTimer.reset();
     UniversalTelegramBot &bot = inst->getControllerInstance()->getTelegramBot();
 
+    ESP_LOGI(TAG, "Polling for Telegram updates...");
     int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+    ESP_LOGI(TAG, "Received %d new messages from Telegram API", numNewMessages);
+    
     if (numNewMessages > 0)
     {
-        ESP_LOGI(TAG, "Queueing %d new messages", numNewMessages);
+        int authorizedMessages = 0;
+        
         for (int i = 0; i < numNewMessages; i++)
         {
+            String chatId = bot.messages[i].chat_id;
+            String fromName = bot.messages[i].from_name;
+            String messageText = bot.messages[i].text;
+            bool isFromBot = fromName.indexOf("bot") != -1 || fromName.indexOf("Bot") != -1; // Check if name contains "bot"
+            
+            ESP_LOGI(TAG, "Message %d: Chat ID: %s, From: %s, Text: %s, IsBot: %s", 
+                     i, chatId.c_str(), fromName.c_str(), messageText.c_str(), isFromBot ? "Yes" : "No");
+            
+            // Filter: Only process messages from authorized chat IDs
+            if (chatId != CHAT_ID) {
+                ESP_LOGW(TAG, "Ignoring message from unauthorized chat ID: %s (expected: %s)", 
+                         chatId.c_str(), CHAT_ID);
+                continue;
+            }
+            
+            // Allow bot-to-bot communication in authorized chats
+            if (isFromBot) {
+                ESP_LOGI(TAG, "Processing bot-to-bot message from: %s in authorized chat: %s", 
+                         fromName.c_str(), chatId.c_str());
+            }
+            
+            authorizedMessages++;
+            ESP_LOGI(TAG, "Processing authorized message from chat ID: %s", chatId.c_str());
+            
             TelegramMessage msg;
-            msg.chatId = new String(bot.messages[i].chat_id);
-            msg.text = new String(bot.messages[i].text);
-            msg.fromName = new String(bot.messages[i].from_name);
+            msg.chatId = new String(chatId);
+            msg.text = new String(messageText);
+            msg.fromName = new String(fromName);
             
             // Queue the message for processing
             if (xQueueSend(telegramQueue, &msg, 0) != pdPASS) {
@@ -532,7 +562,15 @@ void CommandHandler::handleTelegramCommands()
                 delete msg.chatId;
                 delete msg.text;
                 delete msg.fromName;
+            } else {
+                ESP_LOGI(TAG, "Successfully queued message for processing");
             }
+        }
+        
+        if (authorizedMessages > 0) {
+            ESP_LOGI(TAG, "Queued %d authorized messages for processing", authorizedMessages);
+        } else {
+            ESP_LOGI(TAG, "No authorized messages found");
         }
     }
 }
@@ -604,6 +642,10 @@ void CommandHandler::processTelegramMessage(const TelegramMessage& msg)
     String commandText = *msg.text;
     if (commandText.startsWith("/")) {
         commandText.remove(0, 1);
+    }
+    int atIndex = commandText.indexOf('@');
+    if (atIndex != -1) {
+        commandText.remove(atIndex, commandText.length() - atIndex);
     }
     commandText.toLowerCase();
 
@@ -711,7 +753,7 @@ void CommandHandler::processTelegramMessage(const TelegramMessage& msg)
         ESP_LOGI(TAG, "No explicit response (or only whitespace) for Telegram command: %s", commandText.c_str());
         response.message = new String("Command processed, no specific output or only markers received.");
     }
-    
+
     // Send to queue and immediately clear local copy
     if (xQueueSend(responseQueue, &response, 0) == pdPASS) {
         ESP_LOGI(TAG, "Successfully queued response for chat ID: %s", msg.chatId->c_str());
@@ -771,15 +813,6 @@ static void sendSplitTelegramMessage(UniversalTelegramBot &bot, const String &ch
     {
         String chunk = message.substring(offset, std::min(offset + maxLen, total));
         ESP_LOGD(TAG, "Chunk length after trim: %u", chunk.length());
-        String preview = chunk.substring(0, 50);
-        ESP_LOGD(TAG, "Chunk preview (escaped):");
-        for (size_t i = 0; i < preview.length(); ++i) {
-            char pc = preview[i];
-            if (pc == '\n') Serial.print("\\n");
-            else if (pc == '\r') Serial.print("\\r");
-            else Serial.print(pc);
-        }
-        Serial.println();
 
         bool ok = bot.sendMessage(chatId, chunk, "");
         if (!ok) {

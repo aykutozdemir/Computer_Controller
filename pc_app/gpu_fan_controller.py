@@ -14,10 +14,10 @@ Dependencies (see requirements.txt):
   • nvidia-ml-py3 (pynvml) – NVML bindings for GPU telemetry
 
 Usage:
-  python3 gpu_fan_controller.py [--high 80] [--low 70] [--port /dev/ttyUSB0]
+  python3 gpu_fan_controller.py [--high 80] [--low 50] [--port /dev/ttyUSB0]
 
   --high  High-temperature threshold in °C to enable the fan (default: 80)
-  --low   Low-temperature threshold in °C to disable the fan (default: 70)
+  --low   Low-temperature threshold in °C to disable the fan (default: 50)
           (hysteresis prevents rapid toggling)
   --port  Explicit serial port. If omitted, the script auto-detects.
 
@@ -129,16 +129,16 @@ def send_fan_speed(ser: serial.Serial, speed: int) -> None:
 def _calculate_speed(temp: int, low: int, high: int) -> int:
     """Return a fan duty percentage based on temperature.
 
-    • ≤ low  → 0 %
-    • ≥ high → 100 %
+    • ≤ 50°C → 0 %
+    • ≥ 80°C → 100 %
     • between → linear interpolation
     """
-    if temp <= low:
+    if temp <= 50:
         return 0
-    if temp >= high:
+    if temp >= 80:
         return 100
-    # Linear interpolation
-    ratio = (temp - low) / float(high - low)
+    # Linear interpolation between 50°C and 80°C
+    ratio = (temp - 50) / float(80 - 50)
     return int(round(ratio * 100))
 
 
@@ -174,18 +174,18 @@ def run(port: Optional[str], high: int, low: int) -> None:
     gpu = GpuMonitor(index=0)
 
     current_speed: int = 0  # Last speed sent to the ESP32 (percentage)
+    last_temp: int = 0  # Last logged temperature
     send_fan_speed(ser, current_speed)  # Start with fan off
 
     try:
         while True:
             temp = gpu.temperature()
-            LOGGER.info("GPU temperature: %d °C", temp)
-
             desired_speed = _calculate_speed(temp, low, high)
 
-            # Only send command when the speed changes enough (≥2 % difference)
-            if abs(desired_speed - current_speed) >= 2:
-                LOGGER.debug("Updating fan speed → %d%%", desired_speed)
+            # Only log and update when there are significant changes
+            if abs(temp - last_temp) >= 2 or abs(desired_speed - current_speed) >= 2:
+                LOGGER.info("GPU: %d°C → Fan: %d%%", temp, desired_speed)
+                last_temp = temp
                 current_speed = desired_speed
                 send_fan_speed(ser, current_speed)
 
@@ -203,7 +203,7 @@ def run(port: Optional[str], high: int, low: int) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="GPU temperature watcher & ESP32 fan driver")
     parser.add_argument("--high", type=int, default=80, help="High temperature threshold (°C) to turn fan on")
-    parser.add_argument("--low", type=int, default=70, help="Low temperature threshold (°C) to turn fan off")
+    parser.add_argument("--low", type=int, default=50, help="Low temperature threshold (°C) to turn fan off")
     parser.add_argument("--port", type=str, help="Serial port of the ESP32 (auto-detect if omitted)")
     parser.add_argument("--log", type=str, default="info", choices=["debug", "info", "warning", "error"],
                         help="Logging level")

@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Computer Controller</title>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .widget {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            max-width: 400px;
+            width: 100%;
+        }
+        
+        .status {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 15px;
+            border-radius: 10px;
+            background: #f8f9fa;
+        }
+        
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .btn {
+            padding: 15px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .btn-primary {
+            background: #007bff;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #0056b3;
+            transform: translateY(-2px);
+        }
+        
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #1e7e34;
+            transform: translateY(-2px);
+        }
+        
+        .btn-warning {
+            background: #ffc107;
+            color: #212529;
+        }
+        
+        .btn-warning:hover {
+            background: #e0a800;
+            transform: translateY(-2px);
+        }
+        
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #c82333;
+            transform: translateY(-2px);
+        }
+        
+        .settings {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        
+        .toggle-btn {
+            padding: 10px;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            background: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .toggle-btn.active {
+            background: #007bff;
+            color: white;
+            border-color: #007bff;
+        }
+        
+        .log {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            max-height: 150px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 5px;
+            border-radius: 5px;
+        }
+        
+        .log-success { background: #d4edda; }
+        .log-error { background: #f8d7da; }
+        .log-info { background: #d1ecf1; }
+        
+        .config-form {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .config-form input {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        
+        .config-form button {
+            width: 100%;
+            padding: 10px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="widget">
+        <div id="configForm" class="config-form">
+            <h3>MQTT Configuration</h3>
+            <input type="text" id="brokerHost" placeholder="Broker Host (e.g., your-broker.s1.eu.hivemq.cloud)" />
+            <input type="text" id="username" placeholder="Username" />
+            <input type="password" id="password" placeholder="Password" />
+            <button onclick="saveConfig()">Save & Connect</button>
+        </div>
+        
+        <div id="status" class="status disconnected" style="display: none;">
+            Connecting to MQTT...
+        </div>
+        
+        <div id="controls" class="controls" style="display: none;">
+            <button class="btn btn-success" onclick="sendCommand('power_on')">
+                Power On
+            </button>
+            <button class="btn btn-danger" onclick="sendCommand('power_off')">
+                Power Off
+            </button>
+            <button class="btn btn-warning" onclick="sendCommand('reset')">
+                Reset
+            </button>
+            <button class="btn btn-primary" onclick="getStatus()">
+                Refresh Status
+            </button>
+        </div>
+        
+        <div id="settings" class="settings" style="display: none;">
+            <button id="childLock" class="toggle-btn" onclick="toggleSetting('child_lock')">
+                Child Lock
+            </button>
+            <button id="buzzer" class="toggle-btn" onclick="toggleSetting('buzzer')">
+                Buzzer
+            </button>
+        </div>
+        
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        let client = null;
+        let lastStatus = null;
+        let mqttConfig = null;
+
+        // Load saved configuration
+        function loadConfig() {
+            const saved = localStorage.getItem('mqttConfig');
+            if (saved) {
+                mqttConfig = JSON.parse(saved);
+                document.getElementById('brokerHost').value = mqttConfig.host || '';
+                document.getElementById('username').value = mqttConfig.username || '';
+                document.getElementById('password').value = mqttConfig.password || '';
+            }
+        }
+
+        // Save configuration
+        function saveConfig() {
+            const host = document.getElementById('brokerHost').value;
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            if (!host || !username || !password) {
+                alert('Please fill in all fields');
+                return;
+            }
+            
+            mqttConfig = {
+                host: host,
+                port: 8884, // WebSocket port
+                username: username,
+                password: password,
+                clientId: 'phone_widget_' + Math.random().toString(16).substr(2, 8)
+            };
+            
+            localStorage.setItem('mqttConfig', JSON.stringify(mqttConfig));
+            
+            // Hide config form and show controls
+            document.getElementById('configForm').style.display = 'none';
+            document.getElementById('status').style.display = 'block';
+            document.getElementById('controls').style.display = 'grid';
+            document.getElementById('settings').style.display = 'grid';
+            
+            connectMQTT();
+        }
+
+        // Connect to MQTT
+        function connectMQTT() {
+            if (!mqttConfig) {
+                log('No configuration found', 'error');
+                return;
+            }
+
+            const url = `wss://${mqttConfig.host}:${mqttConfig.port}/mqtt`;
+            
+            client = mqtt.connect(url, {
+                username: mqttConfig.username,
+                password: mqttConfig.password,
+                clientId: mqttConfig.clientId,
+                clean: true,
+                reconnectPeriod: 5000,
+                connectTimeout: 30000
+            });
+
+            client.on('connect', function() {
+                updateStatus('Connected to MQTT', 'connected');
+                log('Connected to MQTT broker', 'success');
+                
+                // Subscribe to status and events
+                client.subscribe('computer-controller/status');
+                client.subscribe('computer-controller/events');
+                
+                // Get initial status
+                getStatus();
+            });
+
+            client.on('message', function(topic, message) {
+                try {
+                    const data = JSON.parse(message.toString());
+                    
+                    if (topic === 'computer-controller/status') {
+                        updateStatusDisplay(data);
+                        lastStatus = data;
+                    } else if (topic === 'computer-controller/events') {
+                        log(`Event: ${data.event}`, 'info');
+                    }
+                } catch (e) {
+                    log(`Error parsing message: ${e.message}`, 'error');
+                }
+            });
+
+            client.on('error', function(err) {
+                updateStatus('MQTT Error: ' + err.message, 'disconnected');
+                log(`MQTT Error: ${err.message}`, 'error');
+            });
+
+            client.on('close', function() {
+                updateStatus('Disconnected from MQTT', 'disconnected');
+                log('Disconnected from MQTT', 'error');
+            });
+        }
+
+        // Send MQTT command
+        function sendCommand(command) {
+            if (!client || !client.connected) {
+                log('Not connected to MQTT', 'error');
+                return;
+            }
+
+            const message = {
+                command: command,
+                timestamp: Date.now()
+            };
+
+            client.publish('computer-controller/control', JSON.stringify(message));
+            log(`Sent command: ${command}`, 'success');
+        }
+
+        // Toggle settings
+        function toggleSetting(setting) {
+            const command = setting === 'child_lock' ? 'toggle_child_lock' : 'toggle_buzzer';
+            sendCommand(command);
+        }
+
+        // Get status
+        function getStatus() {
+            if (lastStatus) {
+                updateStatusDisplay(lastStatus);
+            }
+        }
+
+        // Update status display
+        function updateStatusDisplay(data) {
+            const statusDiv = document.getElementById('status');
+            const childLockBtn = document.getElementById('childLock');
+            const buzzerBtn = document.getElementById('buzzer');
+            
+            // Update connection status
+            updateStatus('Connected - PC: ' + (data.pc_powered ? 'ON' : 'OFF'), 'connected');
+            
+            // Update toggle buttons
+            if (data.child_lock !== undefined) {
+                childLockBtn.textContent = `Child Lock: ${data.child_lock ? 'ON' : 'OFF'}`;
+                childLockBtn.classList.toggle('active', data.child_lock);
+            }
+            
+            if (data.buzzer_enabled !== undefined) {
+                buzzerBtn.textContent = `Buzzer: ${data.buzzer_enabled ? 'ON' : 'OFF'}`;
+                buzzerBtn.classList.toggle('active', data.buzzer_enabled);
+            }
+        }
+
+        // Update status indicator
+        function updateStatus(text, className) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = text;
+            statusDiv.className = `status ${className}`;
+        }
+
+        // Add log entry
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            loadConfig();
+        });
+
+        // Handle page visibility changes
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden) {
+                log('Page hidden', 'info');
+            } else {
+                log('Page visible - reconnecting', 'info');
+                if (client && !client.connected && mqttConfig) {
+                    connectMQTT();
+                }
+            }
+        });
+    </script>
+</body>
+</html> 

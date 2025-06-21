@@ -8,6 +8,8 @@
 #include "LedController.h"
 #include "RFStudyManager.h"
 #include "RCSwitchReceiver.h"
+#include "WebServerManager.h"
+#include "MQTTManager.h"
 
 #include <FanController.h>
 
@@ -131,6 +133,46 @@ public:
      */
     bool isPCPoweredOn() const { return digitalRead(PC_POWERED_ON_PIN) == HIGH; }
 
+    /**
+     * @brief Power on the PC via relay.
+     */
+    void powerOnPC() { activatePowerRelay(); }
+
+    /**
+     * @brief Power off the PC via relay.
+     */
+    void powerOffPC() { activatePowerRelay(); }
+
+    /**
+     * @brief Reset the PC via relay.
+     */
+    void resetPC() { activateResetRelay(); }
+
+    /**
+     * @brief Toggle child lock setting.
+     */
+    void toggleChildLock() { settings.toggleChildLock(); }
+
+    /**
+     * @brief Check if child lock is enabled.
+     * @return true if child lock is enabled, false otherwise.
+     */
+    bool isChildLockEnabled() const { return settings.isChildLockEnabled(); }
+
+    /**
+     * @brief Toggle buzzer setting.
+     */
+    void toggleBuzzer() { 
+        settings.toggleBuzzer(); 
+        buzzer.setEnabled(settings.isBuzzerEnabled());
+    }
+
+    /**
+     * @brief Check if buzzer is enabled.
+     * @return true if buzzer is enabled, false otherwise.
+     */
+    bool isBuzzerEnabled() const { return settings.isBuzzerEnabled(); }
+
 private:
     // Command channels
     WiFiClientSecure telegramClient;        ///< Secure client for Telegram communication.
@@ -138,6 +180,12 @@ private:
 
     // Command handler
     CommandHandler* commandHandler;         ///< Pointer to the command handler instance.
+
+    // Web server
+    WebServerManager* webServer;            ///< Web server manager instance.
+
+    // MQTT manager
+    MQTTManager mqttManager;                ///< MQTT manager instance.
 
     // Timers
     SimpleTimer<> wifiCheckTimer;           ///< Timer for periodic WiFi status checks.

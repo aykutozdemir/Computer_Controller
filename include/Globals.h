@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Credentials.h"  // Include credentials first
+
 // Standard C/C++ Library Headers
 #include <stdint.h>
 
@@ -38,6 +40,7 @@
 #include <HTTPClient.h>
 #include <UniversalTelegramBot.h>
 #include <WiFiManager.h>
+#include <PubSubClient.h>
 
 // Forward declarations
 class CommandHandler;
@@ -159,6 +162,21 @@ static constexpr const char* WIFI_AP_PASSWORD = "12345678";  // 8 character mini
 static constexpr uint16_t WIFI_CONFIG_PORTAL_TIMEOUT = 180;  // 3 minute timeout for configuration
 static constexpr uint16_t WIFI_CONNECT_TIMEOUT_SECONDS = 20; // 20 second connection timeout
 
+// MQTT Configuration
+static constexpr const char* MQTT_BROKER = MQTT_BROKER_HOST;  // From Credentials.h
+static constexpr uint16_t MQTT_PORT = 8883;  // TLS port for HiveMQ Cloud
+static constexpr const char* MQTT_CLIENT_ID = "ComputerController_ESP32";
+static constexpr const char* MQTT_USERNAME_CRED = MQTT_USERNAME;  // From Credentials.h
+static constexpr const char* MQTT_PASSWORD_CRED = MQTT_PASSWORD;  // From Credentials.h
+static constexpr uint16_t MQTT_KEEPALIVE_SECONDS = 60;  // Renamed to avoid conflict with PubSubClient
+static constexpr uint16_t MQTT_STATUS_INTERVAL = 5000;  // Publish status every 5 seconds
+
+// MQTT Topics
+static constexpr const char* MQTT_TOPIC_STATUS = "computer-controller/status";
+static constexpr const char* MQTT_TOPIC_CONTROL = "computer-controller/control";
+static constexpr const char* MQTT_TOPIC_SETTINGS = "computer-controller/settings";
+static constexpr const char* MQTT_TOPIC_EVENTS = "computer-controller/events";
+
 // Buzzer Configuration
 static constexpr uint16_t BUZZER_BEEP_DURATION_MS = 100;     // Duration of a single beep
 static constexpr uint16_t BUZZER_PATTERN_INTERVAL_MS = 250;  // Interval between beeps in a pattern
@@ -182,7 +200,7 @@ inline void usDelay(uint32_t us) {
 }
 
 // Compile-time software version string (updates automatically on every build)
-inline constexpr char SOFTWARE_VERSION[] = __DATE__ " " __TIME__;
+const char SOFTWARE_VERSION[] = __DATE__ " " __TIME__;
 
 // Device identification
-inline constexpr char DEVICE_NAME[] = "ComputerController";
+const char DEVICE_NAME[] = "ComputerController";
