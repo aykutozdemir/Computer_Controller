@@ -27,14 +27,26 @@ void DHT11Sensor::loop() {
     
     _timer.reset();
 
-    // Disable interrupts during DHT reading to prevent timing issues
-    noInterrupts();
+    // Read DHT11 sensor with timeout protection
+    unsigned long startTime = millis();
+    const unsigned long timeout = 1000; // 1 second timeout
     
-    float t = _dht.readTemperature();
-    float h = _dht.readHumidity();
+    float t = NAN;
+    float h = NAN;
     
-    // Re-enable interrupts
-    interrupts();
+    // Try to read the sensor with timeout
+    while (isnan(t) || isnan(h)) {
+        t = _dht.readTemperature();
+        h = _dht.readHumidity();
+        
+        // Check for timeout
+        if (millis() - startTime > timeout) {
+            break;
+        }
+        
+        // Small delay to prevent tight loop
+        delay(10);
+    }
 
     // Check if readings are valid
     if (!isnan(t) && !isnan(h)) {

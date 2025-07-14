@@ -1,9 +1,13 @@
 #include "MQTTManager.h"
 #include "Globals.h"
+#include "RootCA.h"
 #include "ComputerController.h"
 
 // External declaration for global ComputerController pointer
 extern ComputerController* g_computerController;
+
+// Define log tag for this file
+static const char* TAG = "MQTTManager";
 
 // Global instance for callback access
 static MQTTManager* g_mqttManager = nullptr;
@@ -13,10 +17,13 @@ MQTTManager::MQTTManager() : mqttClient(wifiClient), isConnected(false) {
 }
 
 void MQTTManager::begin() {
-    Serial.println("MQTT: Initializing MQTT manager...");
+    ESP_LOGI(TAG, "Initializing MQTT manager after display and WiFi initialization...");
     
-    // Configure WiFi client for TLS
-    wifiClient.setInsecure(); // Skip certificate verification for now
+    // Add delay to ensure WiFi is stable before MQTT setup
+    delay(100);
+    
+    // Configure WiFi client for TLS – load Computer Controller Root CA certificate
+    wifiClient.setCACert(ISRG_ROOT_X1_CA_PEM);
     
     // Configure MQTT client
     mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
@@ -27,13 +34,13 @@ void MQTTManager::begin() {
     // Initialize timer
     lastStatusTime = 0;
     
-    Serial.println("MQTT: Manager initialized");
+    ESP_LOGI(TAG, "MQTT manager initialized successfully");
 }
 
 void MQTTManager::loop() {
     if (!WiFi.isConnected()) {
         if (isConnected) {
-            Serial.println("MQTT: WiFi disconnected, disconnecting from broker");
+            ESP_LOGW(TAG, "WiFi disconnected, disconnecting from broker");
             disconnect();
         }
         return;
@@ -57,23 +64,20 @@ bool MQTTManager::connectToBroker() {
         return true;
     }
     
-    Serial.print("MQTT: Connecting to broker ");
-    Serial.print(MQTT_BROKER);
-    Serial.print(":");
-    Serial.println(MQTT_PORT);
+    ESP_LOGI(TAG, "Connecting to broker %s:%d", MQTT_BROKER, MQTT_PORT);
     
     // Generate unique client ID with timestamp
     String clientId = String(MQTT_CLIENT_ID) + "_" + String(millis());
     
     if (mqttClient.connect(clientId.c_str(), MQTT_USERNAME_CRED, MQTT_PASSWORD_CRED)) {
-        Serial.println("MQTT: Connected to broker successfully");
+        ESP_LOGI(TAG, "Connected to broker successfully");
         isConnected = true;
         
         // Subscribe to control topic
         if (mqttClient.subscribe(MQTT_TOPIC_CONTROL)) {
-            Serial.println("MQTT: Subscribed to control topic");
+            ESP_LOGI(TAG, "Subscribed to control topic");
         } else {
-            Serial.println("MQTT: Failed to subscribe to control topic");
+            ESP_LOGE(TAG, "Failed to subscribe to control topic");
         }
         
         // Publish initial status
@@ -81,8 +85,7 @@ bool MQTTManager::connectToBroker() {
         
         return true;
     } else {
-        Serial.print("MQTT: Connection failed, rc=");
-        Serial.println(mqttClient.state());
+        ESP_LOGE(TAG, "Connection failed, rc=%d", mqttClient.state());
         return false;
     }
 }
@@ -91,7 +94,7 @@ void MQTTManager::disconnect() {
     if (isConnected) {
         mqttClient.disconnect();
         isConnected = false;
-        Serial.println("MQTT: Disconnected from broker");
+        ESP_LOGI(TAG, "Disconnected from broker");
     }
 }
 
@@ -121,10 +124,10 @@ void MQTTManager::publishStatusUpdate() {
     // Only publish if status changed
     if (statusJson != lastStatusMessage) {
         if (mqttClient.publish(MQTT_TOPIC_STATUS, statusJson.c_str())) {
-            Serial.println("MQTT: Status published");
+            ESP_LOGD(TAG, "Status published");
             lastStatusMessage = statusJson;
         } else {
-            Serial.println("MQTT: Failed to publish status");
+            ESP_LOGE(TAG, "Failed to publish status");
         }
     }
 }
@@ -145,10 +148,9 @@ void MQTTManager::publishEvent(const String& event, const String& data) {
     serializeJson(doc, eventJson);
     
     if (mqttClient.publish(MQTT_TOPIC_EVENTS, eventJson.c_str())) {
-        Serial.print("MQTT: Event published: ");
-        Serial.println(event);
+        ESP_LOGI(TAG, "Event published: %s", event.c_str());
     } else {
-        Serial.println("MQTT: Failed to publish event");
+        ESP_LOGE(TAG, "Failed to publish event");
     }
 }
 
@@ -158,9 +160,9 @@ void MQTTManager::publishSettings(const String& settings) {
     }
     
     if (mqttClient.publish(MQTT_TOPIC_SETTINGS, settings.c_str())) {
-        Serial.println("MQTT: Settings published");
+        ESP_LOGI(TAG, "Settings published");
     } else {
-        Serial.println("MQTT: Failed to publish settings");
+        ESP_LOGE(TAG, "Failed to publish settings");
     }
 }
 
@@ -177,13 +179,8 @@ String MQTTManager::getConnectionStatus() const {
 }
 
 void MQTTManager::handleControlMessage(const String& command, const String& data) {
-    Serial.print("MQTT: Received control command: ");
-    Serial.print(command);
-    if (data.length() > 0) {
-        Serial.print(" with data: ");
-        Serial.print(data);
-    }
-    Serial.println();
+    ESP_LOGI(TAG, "Received control command: %s%s", command.c_str(), 
+             data.length() > 0 ? (" with data: " + data).c_str() : "");
     
     // Handle different commands
     if (command == "power_on") {
@@ -212,8 +209,7 @@ void MQTTManager::handleControlMessage(const String& command, const String& data
             publishEvent("buzzer_toggled", g_computerController->isBuzzerEnabled() ? "enabled" : "disabled");
         }
     } else {
-        Serial.print("MQTT: Unknown command: ");
-        Serial.println(command);
+        ESP_LOGW(TAG, "Unknown command: %s", command.c_str());
     }
 }
 
@@ -226,10 +222,7 @@ void MQTTManager::messageCallback(char* topic, byte* payload, unsigned int lengt
     String topicStr = String(topic);
     String payloadStr = String((char*)payload, length);
     
-    Serial.print("MQTT: Message received on topic: ");
-    Serial.print(topicStr);
-    Serial.print(" with payload: ");
-    Serial.println(payloadStr);
+    ESP_LOGI(TAG, "Message received on topic: %s with payload: %s", topicStr.c_str(), payloadStr.c_str());
     
     if (topicStr == MQTT_TOPIC_CONTROL) {
         // Parse JSON control message
@@ -237,8 +230,7 @@ void MQTTManager::messageCallback(char* topic, byte* payload, unsigned int lengt
         DeserializationError error = deserializeJson(doc, payloadStr);
         
         if (error) {
-            Serial.print("MQTT: JSON parsing failed: ");
-            Serial.println(error.c_str());
+            ESP_LOGE(TAG, "JSON parsing failed: %s", error.c_str());
             return;
         }
         

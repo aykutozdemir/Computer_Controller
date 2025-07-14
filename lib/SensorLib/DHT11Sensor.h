@@ -43,6 +43,12 @@ public:
     float getTemperature() const { return _temperature; }
     /** Humidity getter (%RH). */
     float getHumidity() const { return _humidity; }
+    
+    /**
+     * @brief Check if the sensor is available and working.
+     * @return true if the sensor has successfully read at least once, false otherwise.
+     */
+    bool isAvailable() const { return _sensorOk; }
 
 private:
     DHT _dht;                      // Driver instance

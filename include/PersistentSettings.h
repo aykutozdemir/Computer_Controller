@@ -107,4 +107,10 @@ private:
     
     static PersistentSettings* instance; ///< Singleton instance pointer.
     Preferences preferences;             ///< ESP32 Preferences object for NVS access.
+
+    // Cached values to avoid slow NVS access inside tight loops
+    bool cachedChildLock = false;
+    bool cachedBuzzer = true;
+    bool cachedRFEnabled = true;
+    uint32_t cachedRFButtonCode = 0;
 }; 

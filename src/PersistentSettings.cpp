@@ -16,32 +16,33 @@ void PersistentSettings::begin() {
         return;
     }
 
-    // Initialize child lock setting if not exists
+    // Initialize defaults if missing
     if (!preferences.isKey(NVS_KEY_CHILD_LOCK)) {
         preferences.putBool(NVS_KEY_CHILD_LOCK, false);
     }
-
-    // Initialize buzzer setting if not exists
     if (!preferences.isKey(NVS_KEY_BUZZER_ENABLED)) {
         preferences.putBool(NVS_KEY_BUZZER_ENABLED, true);
     }
-
-    // Initialize RF enabled setting if not exists
     if (!preferences.isKey(NVS_KEY_RF_ENABLED)) {
-        preferences.putBool(NVS_KEY_RF_ENABLED, true); // Default to enabled
+        preferences.putBool(NVS_KEY_RF_ENABLED, true);
+    }
+    if (!preferences.isKey(NVS_KEY_RF_BUTTON_CODE)) {
+        preferences.putUInt(NVS_KEY_RF_BUTTON_CODE, 0);
     }
 
-    // Initialize RF button code setting if not exists
-    if (!preferences.isKey(NVS_KEY_RF_BUTTON_CODE)) {
-        preferences.putUInt(NVS_KEY_RF_BUTTON_CODE, 0); // Default to 0 (no code stored)
-    }
+    // Load cached values
+    cachedChildLock = preferences.getBool(NVS_KEY_CHILD_LOCK, false);
+    cachedBuzzer    = preferences.getBool(NVS_KEY_BUZZER_ENABLED, true);
+    cachedRFEnabled = preferences.getBool(NVS_KEY_RF_ENABLED, true);
+    cachedRFButtonCode = preferences.getUInt(NVS_KEY_RF_BUTTON_CODE, 0);
 }
 
 bool PersistentSettings::isChildLockEnabled() {
-    return preferences.getBool(NVS_KEY_CHILD_LOCK, false); // Default to false if not set
+    return cachedChildLock;
 }
 
 void PersistentSettings::setChildLockEnabled(bool enabled) {
+    cachedChildLock = enabled;
     if (!preferences.putBool(NVS_KEY_CHILD_LOCK, enabled)) {
         Serial.println("Failed to save child lock setting");
     }
@@ -53,10 +54,11 @@ void PersistentSettings::toggleChildLock() {
 }
 
 bool PersistentSettings::isBuzzerEnabled() {
-    return preferences.getBool(NVS_KEY_BUZZER_ENABLED, true); // Default to true if not set
+    return cachedBuzzer;
 }
 
 void PersistentSettings::setBuzzerEnabled(bool enabled) {
+    cachedBuzzer = enabled;
     if (!preferences.putBool(NVS_KEY_BUZZER_ENABLED, enabled)) {
         Serial.println("Failed to save buzzer setting");
     }
@@ -68,20 +70,22 @@ void PersistentSettings::toggleBuzzer() {
 }
 
 bool PersistentSettings::isRFEnabled() {
-    return preferences.getBool(NVS_KEY_RF_ENABLED, true); // Default to true if not set
+    return cachedRFEnabled;
 }
 
 void PersistentSettings::setRFEnabled(bool enabled) {
+    cachedRFEnabled = enabled;
     if (!preferences.putBool(NVS_KEY_RF_ENABLED, enabled)) {
         Serial.println("Failed to save RF enabled setting");
     }
 }
 
 uint32_t PersistentSettings::getRfButtonCode() {
-    return preferences.getUInt(NVS_KEY_RF_BUTTON_CODE, 0); // Default to 0 if not set
+    return cachedRFButtonCode;
 }
 
 void PersistentSettings::setRfButtonCode(uint32_t code) {
+    cachedRFButtonCode = code;
     if (!preferences.putUInt(NVS_KEY_RF_BUTTON_CODE, code)) {
         Serial.println("Failed to save RF button code");
     }
@@ -89,16 +93,8 @@ void PersistentSettings::setRfButtonCode(uint32_t code) {
 
 void PersistentSettings::clearAll() {
     ESP_LOGI("PersistentSettings", "Clearing all settings");
-    
-    // Clear all settings by setting them to their default values
     setChildLockEnabled(false);
     setBuzzerEnabled(true);
     setRFEnabled(false);
     setRfButtonCode(0);
-    
-    // Commit changes to NVS
-    preferences.end();
-    preferences.begin("settings", false);
-    
-    ESP_LOGI("PersistentSettings", "All settings cleared successfully");
 } 

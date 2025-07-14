@@ -64,6 +64,6 @@ private:
     void updateSettingsFromJSON(const JsonDocument& doc);
     void handleControlAction(const String& action);
     
-    static constexpr uint16_t WEB_SERVER_PORT = 80;           ///< Web server port
-    static constexpr size_t JSON_BUFFER_SIZE = 2048;          ///< JSON buffer size for responses
+#define WEB_SERVER_PORT 80           ///< Web server port
+#define JSON_BUFFER_SIZE 2048          ///< JSON buffer size for responses
 }; 

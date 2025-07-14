@@ -4,6 +4,7 @@
 #include "SimpleBuzzer.h"
 #include "SimpleTimer.h"
 #include "Globals.h"
+#include "PersistentSettings.h"
 
 /**
  * @brief Manages a single button, detecting short, long, and very long presses.

@@ -4,6 +4,7 @@
 #include "Globals.h"
 #include <Arduino.h>
 #include <freertos/queue.h>
+#include <esp_wifi.h>
 
 // Define log tag
 static const char* TAG = "CommandHandler";
@@ -287,16 +288,185 @@ void cmdRF(SerialCommands& sender, Args& args) {
     }
 
     if (args[0].getType() == ArgType::Null) {
-        Utilities::printError(sender, F("Usage: rf <on|off>"));
+        Utilities::printError(sender, F("Usage: rf <on|off|stats|reset|fallback|debug|test>"));
         return;
     }
 
     if (args[0].getType() == ArgType::String) {
-        bool enable = strcmp(args[0].getString(), "on") == 0;
-        PersistentSettings::getInstance().setRFEnabled(enable);
-        sender.getSerial().print(F("RF functionality "));
-        sender.getSerial().println(enable ? F("enabled") : F("disabled"));
-        Utilities::printOK(sender);
+        const char* mode = args[0].getString();
+        
+        if (strcmp(mode, "on") == 0) {
+            PersistentSettings::getInstance().setRFEnabled(true);
+            sender.getSerial().println(F("RF functionality enabled"));
+            Utilities::printOK(sender);
+        }
+        else if (strcmp(mode, "off") == 0) {
+            PersistentSettings::getInstance().setRFEnabled(false);
+            sender.getSerial().println(F("RF functionality disabled"));
+            Utilities::printOK(sender);
+        }
+        else if (strcmp(mode, "stats") == 0) {
+            // Show RF stability statistics
+            RCSwitchReceiver& rfReceiver = inst->getControllerInstance()->getRCSwitchReceiver();
+            uint32_t totalSignals, validSignals, noiseSignals;
+            rfReceiver.getSignalStats(totalSignals, validSignals, noiseSignals);
+            
+            sender.getSerial().println(F("RF Signal Statistics:"));
+            sender.getSerial().print(F("- Total signals received: "));
+            sender.getSerial().println(totalSignals);
+            sender.getSerial().print(F("- Valid signals: "));
+            sender.getSerial().println(validSignals);
+            sender.getSerial().print(F("- Noise signals: "));
+            sender.getSerial().println(noiseSignals);
+            
+            if (totalSignals > 0) {
+                float successRate = (float)validSignals / totalSignals * 100.0f;
+                sender.getSerial().print(F("- Success rate: "));
+                sender.getSerial().print(successRate, 1);
+                sender.getSerial().println(F("%"));
+            }
+            
+            sender.getSerial().print(F("- Current signal strength: "));
+            sender.getSerial().println(rfReceiver.getSignalStrength());
+            sender.getSerial().print(F("- Signal validated: "));
+            sender.getSerial().println(rfReceiver.isSignalValidated() ? F("Yes") : F("No"));
+            sender.getSerial().print(F("- Fallback mode: "));
+            sender.getSerial().println(rfReceiver.isFallbackModeEnabled() ? F("Enabled") : F("Disabled"));
+            
+            Utilities::printOK(sender);
+        }
+        else if (strcmp(mode, "reset") == 0) {
+            // Reset RF statistics
+            RCSwitchReceiver& rfReceiver = inst->getControllerInstance()->getRCSwitchReceiver();
+            rfReceiver.resetSignalStats();
+            sender.getSerial().println(F("RF statistics reset"));
+            Utilities::printOK(sender);
+        }
+        else if (strcmp(mode, "fallback") == 0) {
+            // Toggle fallback mode
+            RCSwitchReceiver& rfReceiver = inst->getControllerInstance()->getRCSwitchReceiver();
+            bool currentMode = rfReceiver.isFallbackModeEnabled();
+            rfReceiver.setFallbackMode(!currentMode);
+            sender.getSerial().print(F("Fallback mode "));
+            sender.getSerial().println(!currentMode ? F("enabled") : F("disabled"));
+            Utilities::printOK(sender);
+        }
+        else if (strcmp(mode, "debug") == 0) {
+            // Enable debug mode for RF troubleshooting
+            sender.getSerial().println(F("RF Debug Mode - Press remote button to test"));
+            sender.getSerial().println(F("Monitoring for signals... (30 seconds)"));
+            sender.getSerial().println(F("Press Ctrl+C to stop"));
+            
+            // Temporarily enable debug logging
+            esp_log_level_set("RCSwitchReceiver", ESP_LOG_DEBUG);
+            
+            unsigned long startTime = millis();
+            unsigned long lastSignalCount = 0;
+            
+            while ((millis() - startTime) < 30000) {
+                // Check for signals
+                RCSwitchReceiver& rfReceiver = inst->getControllerInstance()->getRCSwitchReceiver();
+                uint32_t totalSignals, validSignals, noiseSignals;
+                rfReceiver.getSignalStats(totalSignals, validSignals, noiseSignals);
+                
+                if (totalSignals > lastSignalCount) {
+                    sender.getSerial().print(F("Signals detected: "));
+                    sender.getSerial().print(totalSignals);
+                    sender.getSerial().print(F(" (Valid: "));
+                    sender.getSerial().print(validSignals);
+                    sender.getSerial().print(F(", Noise: "));
+                    sender.getSerial().print(noiseSignals);
+                    sender.getSerial().println(F(")"));
+                    lastSignalCount = totalSignals;
+                }
+                
+                delay(100); // Check every 100ms
+            }
+            
+            // Restore normal logging
+            esp_log_level_set("RCSwitchReceiver", ESP_LOG_INFO);
+            
+            sender.getSerial().println(F("Debug mode finished"));
+            Utilities::printOK(sender);
+        }
+        else if (strcmp(mode, "test") == 0) {
+            // Hardware test mode
+            sender.getSerial().println(F("=== RF Hardware Test ==="));
+            sender.getSerial().println(F("1. Check if RF receiver is connected to GPIO 35"));
+            sender.getSerial().println(F("2. Verify power supply is 3.3V"));
+            sender.getSerial().println(F("3. Check antenna connection (17.3cm wire recommended)"));
+            sender.getSerial().println(F("4. Press remote button at different distances"));
+            sender.getSerial().println(F("5. Monitor signal detection below:"));
+            sender.getSerial().println();
+            
+            // Reset statistics first
+            RCSwitchReceiver& rfReceiver = inst->getControllerInstance()->getRCSwitchReceiver();
+            rfReceiver.resetSignalStats();
+            
+            unsigned long startTime = millis();
+            unsigned long lastReportTime = 0;
+            
+            while ((millis() - startTime) < 60000) { // 1 minute test
+                uint32_t totalSignals, validSignals, noiseSignals;
+                rfReceiver.getSignalStats(totalSignals, validSignals, noiseSignals);
+                
+                // Report every 2 seconds
+                if ((millis() - lastReportTime) > 2000) {
+                    sender.getSerial().print(F("Time: "));
+                    sender.getSerial().print((millis() - startTime) / 1000);
+                    sender.getSerial().print(F("s | Total: "));
+                    sender.getSerial().print(totalSignals);
+                    sender.getSerial().print(F(" | Valid: "));
+                    sender.getSerial().print(validSignals);
+                    sender.getSerial().print(F(" | Noise: "));
+                    sender.getSerial().print(noiseSignals);
+                    
+                    if (totalSignals > 0) {
+                        float successRate = (float)validSignals / totalSignals * 100.0f;
+                        sender.getSerial().print(F(" | Success: "));
+                        sender.getSerial().print(successRate, 1);
+                        sender.getSerial().print(F("%"));
+                    }
+                    
+                    sender.getSerial().println();
+                    lastReportTime = millis();
+                }
+                
+                delay(50);
+            }
+            
+            sender.getSerial().println();
+            sender.getSerial().println(F("=== Test Results ==="));
+            uint32_t finalTotal, finalValid, finalNoise;
+            rfReceiver.getSignalStats(finalTotal, finalValid, finalNoise);
+            
+            if (finalTotal == 0) {
+                sender.getSerial().println(F("❌ NO SIGNALS DETECTED"));
+                sender.getSerial().println(F("   - Check RF receiver connection"));
+                sender.getSerial().println(F("   - Verify power supply"));
+                sender.getSerial().println(F("   - Test with different remote"));
+            } else if (finalValid == 0) {
+                sender.getSerial().println(F("⚠️  SIGNALS DETECTED BUT ALL REJECTED"));
+                sender.getSerial().println(F("   - Check antenna connection"));
+                sender.getSerial().println(F("   - Verify remote frequency"));
+                sender.getSerial().println(F("   - Try adjusting RF parameters"));
+            } else {
+                float finalSuccessRate = (float)finalValid / finalTotal * 100.0f;
+                sender.getSerial().print(F("✅ SIGNALS WORKING - Success Rate: "));
+                sender.getSerial().print(finalSuccessRate, 1);
+                sender.getSerial().println(F("%"));
+                
+                if (finalSuccessRate < 50) {
+                    sender.getSerial().println(F("   - Consider hardware improvements"));
+                    sender.getSerial().println(F("   - Check RF_CIRCUIT_IMPROVEMENTS.md"));
+                }
+            }
+            
+            Utilities::printOK(sender);
+        }
+        else {
+            Utilities::printError(sender, F("Invalid mode. Usage: rf <on|off|stats|reset|fallback|debug|test>"));
+        }
     } else {
         Utilities::printError(sender, F("Invalid argument type for rf. Expected string."));
     }
@@ -339,6 +509,44 @@ void cmdIdentity(SerialCommands& sender, Args& args) {
     Utilities::printOK(sender);
 }
 
+// New command: time sync
+void cmdTimeSync(SerialCommands& sender, Args& args) {
+    CommandHandler* inst = CommandHandler::getInstance();
+    if (!inst || !inst->getControllerInstance()) {
+        Utilities::printError(sender, F("CommandHandler or Controller not initialized"));
+        return;
+    }
+
+    ESP_LOGI(TAG, "Executing time sync command");
+    sender.getSerial().println(F("Synchronizing time with NTP servers..."));
+    
+    if (inst->getControllerInstance()->syncTimeWithNTP()) {
+        sender.getSerial().print(F("Time synchronized: "));
+        sender.getSerial().println(inst->getControllerInstance()->getCurrentTimeString());
+        Utilities::printOK(sender);
+    } else {
+        Utilities::printError(sender, F("Failed to synchronize time"));
+    }
+}
+
+static void dumpStoredWifiCreds(Stream &out) {
+    wifi_config_t cfg;
+    if (esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK) {
+        const char *ssid = reinterpret_cast<const char*>(cfg.sta.ssid);
+        const char *pass = reinterpret_cast<const char*>(cfg.sta.password);
+        out.print(F("Stored SSID: \"")); out.print(ssid); out.println(F("\""));
+        out.print(F("Stored PASS: \"")); out.print(pass); out.println(F("\""));
+    } else {
+        out.println(F("Failed to read WiFi config from NVS"));
+    }
+}
+
+void cmdWiFiCreds(SerialCommands& sender, Args& args) {
+    ESP_LOGI(TAG, "Executing wificreds command");
+    dumpStoredWifiCreds(sender.getSerial());
+    Utilities::printOK(sender);
+}
+
 // Define the command table *before* any SerialCommands instances are built so
 // that we can safely pass a valid pointer/count to their constructors.
 static const Command cmdArray[] = {
@@ -350,13 +558,15 @@ static const Command cmdArray[] = {
     COMMAND(cmdBuzzer, "buzzer", ARG(ArgType::String, "state"), NULL, "Enable/disable buzzer (on/off)"),
     COMMAND(cmdGpuFan, "gpufan", ARG(ArgType::Int, "speed"), NULL, "Set GPU fan speed (0-100)"),
     COMMAND(cmdRfStudy, "rfstudy", ARG(ArgType::String, "mode"), NULL, "RF button code management (learn: detect new code, get: show current code, clear: remove code)"),
-    COMMAND(cmdRF, "rf", ARG(ArgType::String, "state"), NULL, "Enable/disable RF functionality (on/off)"),
+    COMMAND(cmdRF, "rf", ARG(ArgType::String, "mode"), NULL, "Enable/disable RF functionality (on/off|stats|reset|fallback|debug|test)"),
     COMMAND(cmdResetMCU, "resetmcu", NULL, "Reset the ESP32 microcontroller"),
     COMMAND(cmdVersion, "version", NULL, "Show software version"),
-    COMMAND(cmdIdentity, "identity", NULL, "Show device identity and version")
+    COMMAND(cmdIdentity, "identity", NULL, "Show device identity and version"),
+    COMMAND(cmdTimeSync, "timesync", NULL, "Synchronize time with NTP servers"),
+    COMMAND(cmdWiFiCreds, "wificreds", NULL, "Show stored WiFi credentials (SSID/PASS)")
 };
 
-static constexpr uint16_t kCommandCount = sizeof(cmdArray) / sizeof(Command);
+#define kCommandCount (sizeof(cmdArray) / sizeof(Command))
 
 const Command* CommandHandler::getCommands(uint16_t* count)
 {
@@ -375,8 +585,15 @@ CommandHandler::CommandHandler(ComputerController* controller)
       serialCheckTimer(SERIAL_CHECK_INTERVAL),
       telegramUpdateTimer(MESSAGE_CHECK_INTERVAL),
       telegramTaskHandle(nullptr),
+      telegramPollTaskHandle(nullptr),
+      telegramSendTaskHandle(nullptr),
       telegramQueue(nullptr),
-      responseQueue(nullptr)
+      responseQueue(nullptr),
+      telegramPollQueue(nullptr),
+      telegramPollingEnabled(true),
+      lastPollTime(0),
+      lastSendTime(0),
+      lastProcessTime(0)
 {
     // Set singleton instance pointer
     CommandHandler::instance = this;
@@ -391,11 +608,31 @@ CommandHandler::CommandHandler(ComputerController* controller)
         return;
     }
     
+    // Create queue for Telegram responses
+    responseQueue = xQueueCreate(10, sizeof(TelegramResponse));
+    if (!responseQueue) {
+        ESP_LOGE(TAG, "Failed to create Telegram response queue!");
+        vQueueDelete(telegramQueue);
+        telegramQueue = nullptr;
+        return;
+    }
+    
+    // Create queue for Telegram polling requests
+    telegramPollQueue = xQueueCreate(5, sizeof(bool));
+    if (!telegramPollQueue) {
+        ESP_LOGE(TAG, "Failed to create Telegram polling queue!");
+        vQueueDelete(telegramQueue);
+        vQueueDelete(responseQueue);
+        telegramQueue = nullptr;
+        responseQueue = nullptr;
+        return;
+    }
+    
     // Create task for processing Telegram messages
     BaseType_t taskCreated = xTaskCreatePinnedToCore(
         telegramTaskFunction,   // Task function
         "TelegramTask",         // Task name
-        4096,                   // Stack size
+        8192,                   // Stack size (increased from 4096 to 8192)
         this,                   // Task parameter
         1,                      // Task priority
         &telegramTaskHandle,    // Task handle
@@ -405,15 +642,61 @@ CommandHandler::CommandHandler(ComputerController* controller)
     if (taskCreated != pdPASS) {
         ESP_LOGE(TAG, "Failed to create Telegram processing task!");
         vQueueDelete(telegramQueue);
+        vQueueDelete(responseQueue);
+        vQueueDelete(telegramPollQueue);
         telegramQueue = nullptr;
+        responseQueue = nullptr;
+        telegramPollQueue = nullptr;
+        return;
     }
-
-    // Create queue for Telegram responses
-    responseQueue = xQueueCreate(10, sizeof(TelegramResponse));
-    if (!responseQueue) {
-        ESP_LOGE(TAG, "Failed to create Telegram response queue!");
+    
+    // Create task for non-blocking Telegram polling
+    taskCreated = xTaskCreatePinnedToCore(
+        telegramPollTaskFunction,   // Task function
+        "TelegramPoll",             // Task name
+        8192,                       // Stack size (increased from 4096 to 8192)
+        this,                       // Task parameter
+        1,                          // Task priority
+        &telegramPollTaskHandle,    // Task handle
+        APP_CPU_NUM                 // Run on APP CPU
+    );
+    
+    if (taskCreated != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create Telegram polling task!");
+        vTaskDelete(telegramTaskHandle);
+        telegramTaskHandle = nullptr;
         vQueueDelete(telegramQueue);
+        vQueueDelete(responseQueue);
+        vQueueDelete(telegramPollQueue);
         telegramQueue = nullptr;
+        responseQueue = nullptr;
+        telegramPollQueue = nullptr;
+        return;
+    }
+    
+    // Create task for non-blocking Telegram sending
+    taskCreated = xTaskCreatePinnedToCore(
+        telegramSendTaskFunction,   // Task function
+        "TelegramSend",             // Task name
+        8192,                       // Stack size (increased from 4096 to 8192)
+        this,                       // Task parameter
+        1,                          // Task priority
+        &telegramSendTaskHandle,    // Task handle
+        APP_CPU_NUM                 // Run on APP CPU
+    );
+    
+    if (taskCreated != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create Telegram sending task!");
+        vTaskDelete(telegramTaskHandle);
+        vTaskDelete(telegramPollTaskHandle);
+        telegramTaskHandle = nullptr;
+        telegramPollTaskHandle = nullptr;
+        vQueueDelete(telegramQueue);
+        vQueueDelete(responseQueue);
+        vQueueDelete(telegramPollQueue);
+        telegramQueue = nullptr;
+        responseQueue = nullptr;
+        telegramPollQueue = nullptr;
         return;
     }
 }
@@ -421,9 +704,22 @@ CommandHandler::CommandHandler(ComputerController* controller)
 CommandHandler::~CommandHandler() {
     ESP_LOGI(TAG, "Destroying CommandHandler");
     
+    // Disable polling
+    telegramPollingEnabled = false;
+    
     if (telegramTaskHandle) {
         vTaskDelete(telegramTaskHandle);
         telegramTaskHandle = nullptr;
+    }
+    
+    if (telegramPollTaskHandle) {
+        vTaskDelete(telegramPollTaskHandle);
+        telegramPollTaskHandle = nullptr;
+    }
+    
+    if (telegramSendTaskHandle) {
+        vTaskDelete(telegramSendTaskHandle);
+        telegramSendTaskHandle = nullptr;
     }
     
     if (telegramQueue) {
@@ -434,6 +730,11 @@ CommandHandler::~CommandHandler() {
     if (responseQueue) {
         vQueueDelete(responseQueue);
         responseQueue = nullptr;
+    }
+    
+    if (telegramPollQueue) {
+        vQueueDelete(telegramPollQueue);
+        telegramPollQueue = nullptr;
     }
     
     if (CommandHandler::instance == this) {
@@ -504,118 +805,34 @@ void CommandHandler::handleSerialCommands()
 
 void CommandHandler::handleTelegramCommands()
 {
+    // This function is now non-blocking since Telegram polling is handled by a separate task
+    // We only need to handle any immediate responses or status checks here
+    
     CommandHandler* inst = getInstance();
     if (!inst || !inst->getControllerInstance()) {
         ESP_LOGE(TAG, "CommandHandler::instance or controller is null in handleTelegramCommands!");
         return;
     }
 
-    if (!telegramUpdateTimer.isReady()) {
+    // Only process when WiFi is connected
+    if (!WiFi.isConnected()) {
         return;
-    }
-    telegramUpdateTimer.reset();
-    UniversalTelegramBot &bot = inst->getControllerInstance()->getTelegramBot();
-
-    ESP_LOGI(TAG, "Polling for Telegram updates...");
-    int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
-    ESP_LOGI(TAG, "Received %d new messages from Telegram API", numNewMessages);
-    
-    if (numNewMessages > 0)
-    {
-        int authorizedMessages = 0;
-        
-        for (int i = 0; i < numNewMessages; i++)
-        {
-            String chatId = bot.messages[i].chat_id;
-            String fromName = bot.messages[i].from_name;
-            String messageText = bot.messages[i].text;
-            bool isFromBot = fromName.indexOf("bot") != -1 || fromName.indexOf("Bot") != -1; // Check if name contains "bot"
-            
-            ESP_LOGI(TAG, "Message %d: Chat ID: %s, From: %s, Text: %s, IsBot: %s", 
-                     i, chatId.c_str(), fromName.c_str(), messageText.c_str(), isFromBot ? "Yes" : "No");
-            
-            // Filter: Only process messages from authorized chat IDs
-            if (chatId != CHAT_ID) {
-                ESP_LOGW(TAG, "Ignoring message from unauthorized chat ID: %s (expected: %s)", 
-                         chatId.c_str(), CHAT_ID);
-                continue;
-            }
-            
-            // Allow bot-to-bot communication in authorized chats
-            if (isFromBot) {
-                ESP_LOGI(TAG, "Processing bot-to-bot message from: %s in authorized chat: %s", 
-                         fromName.c_str(), chatId.c_str());
-            }
-            
-            authorizedMessages++;
-            ESP_LOGI(TAG, "Processing authorized message from chat ID: %s", chatId.c_str());
-            
-            TelegramMessage msg;
-            msg.chatId = new String(chatId);
-            msg.text = new String(messageText);
-            msg.fromName = new String(fromName);
-            
-            // Queue the message for processing
-            if (xQueueSend(telegramQueue, &msg, 0) != pdPASS) {
-                ESP_LOGW(TAG, "Failed to queue Telegram message from %s", msg.fromName->c_str());
-                // Free allocated memory to avoid leaks if the message could not be queued
-                delete msg.chatId;
-                delete msg.text;
-                delete msg.fromName;
-            } else {
-                ESP_LOGI(TAG, "Successfully queued message for processing");
-            }
-        }
-        
-        if (authorizedMessages > 0) {
-            ESP_LOGI(TAG, "Queued %d authorized messages for processing", authorizedMessages);
-        } else {
-            ESP_LOGI(TAG, "No authorized messages found");
-        }
     }
 }
 
 void CommandHandler::handleTelegramResponses()
 {
+    // This function is now non-blocking since Telegram sending is handled by a separate task
+    // We only need to handle any immediate status checks here
+    
     if (!responseQueue) {
         ESP_LOGE(TAG, "Response queue is null!");
         return;
     }
 
-    // Use static allocation to avoid heap issues
-    static TelegramResponse response;
-    
-    // Check if there are any messages in the queue
-    UBaseType_t queueSize = uxQueueMessagesWaiting(responseQueue);
-    if (queueSize > 0) {
-        ESP_LOGI(TAG, "Found %d messages in response queue", queueSize);
-    }
-    
-    while (xQueueReceive(responseQueue, &response, 0) == pdPASS) {
-        ESP_LOGI(TAG, "Processing response for chat ID: %s", response.chatId && !response.chatId->isEmpty() ? response.chatId->c_str() : "<empty>");
-        
-        if (controller) {
-            // Create copies of the strings (not cleared until after send)
-            String *chatIdCopy = response.chatId;
-            String *messageCopy = response.message;
-
-            // Send the message first (while original still intact)
-            if (chatIdCopy && messageCopy && !chatIdCopy->isEmpty() && !messageCopy->isEmpty()) {
-                ESP_LOGI(TAG, "Sending Telegram message to %s: %s", chatIdCopy->c_str(), messageCopy->c_str());
-                sendSplitTelegramMessage(controller->getTelegramBot(), *chatIdCopy, *messageCopy);
-            } else {
-                ESP_LOGW(TAG, "Skipping empty message or chat ID");
-            }
-
-            // Now that sending is done, clear the response struct to free memory
-            delete response.chatId;
-            delete response.message;
-            response.chatId = nullptr;
-            response.message = nullptr;
-            ESP_LOGI(TAG, "Response processed and cleared");
-        } else {
-            ESP_LOGE(TAG, "Controller is null, cannot send response");
-        }
+    // Only process when WiFi is connected
+    if (!WiFi.isConnected()) {
+        return;
     }
 }
 
@@ -627,6 +844,9 @@ void CommandHandler::telegramTaskFunction(void* parameter)
     while (true) {
         // Wait for a message to arrive in the queue
         if (xQueueReceive(inst->telegramQueue, &msg, portMAX_DELAY) == pdPASS) {
+            // Update watchdog timer
+            inst->lastProcessTime = millis();
+            
             inst->processTelegramMessage(msg);
             // Free dynamically allocated strings inside the message after processing
             delete msg.chatId;
@@ -634,6 +854,110 @@ void CommandHandler::telegramTaskFunction(void* parameter)
             delete msg.fromName;
         }
     }
+}
+
+void CommandHandler::telegramPollTaskFunction(void* parameter)
+{
+    CommandHandler* inst = static_cast<CommandHandler*>(parameter);
+    const TickType_t pollInterval = pdMS_TO_TICKS(MESSAGE_CHECK_INTERVAL);
+    
+    ESP_LOGI(TAG, "Telegram polling task started");
+    
+    while (inst->telegramPollingEnabled) {
+        // Only poll when WiFi is connected and stable
+        if (WiFi.isConnected() && WiFi.status() == WL_CONNECTED) {            
+            // Add error handling and timeout protection
+            try {
+                // Update watchdog timer
+                inst->lastPollTime = millis();
+                
+                // This is now in a separate task, so blocking is acceptable
+                UniversalTelegramBot &bot = inst->getControllerInstance()->getTelegramBot();
+                
+                // Add timeout protection for the blocking call
+                unsigned long startTime = millis();
+                const unsigned long MAX_POLL_TIME = 5000; // 5 second timeout
+                
+                int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+                
+                unsigned long pollTime = millis() - startTime;
+                if (pollTime > MAX_POLL_TIME) {
+                    ESP_LOGW(TAG, "Telegram polling took %lu ms (longer than %lu ms threshold)", 
+                             pollTime, MAX_POLL_TIME);
+                }
+                
+                if (numNewMessages > 0) {
+                    ESP_LOGI(TAG, "Received %d new messages from Telegram API in %lu ms", numNewMessages, pollTime);
+                    
+                    int authorizedMessages = 0;
+                    
+                    for (int i = 0; i < numNewMessages; i++) {
+                        String chatId = bot.messages[i].chat_id;
+                        String fromName = bot.messages[i].from_name;
+                        String messageText = bot.messages[i].text;
+                        bool isFromBot = fromName.indexOf("bot") != -1 || fromName.indexOf("Bot") != -1;
+                        
+                        ESP_LOGI(TAG, "Message %d: Chat ID: %s, From: %s, Text: %s, IsBot: %s", 
+                                 i, chatId.c_str(), fromName.c_str(), messageText.c_str(), isFromBot ? "Yes" : "No");
+                        
+                        // Filter: Only process messages from authorized chat IDs
+                        if (chatId != CHAT_ID) {
+                            ESP_LOGW(TAG, "Ignoring message from unauthorized chat ID: %s (expected: %s)", 
+                                     chatId.c_str(), CHAT_ID);
+                            continue;
+                        }
+                        
+                        // Allow bot-to-bot communication in authorized chats
+                        if (isFromBot) {
+                            ESP_LOGI(TAG, "Processing bot-to-bot message from: %s in authorized chat: %s", 
+                                     fromName.c_str(), chatId.c_str());
+                        }
+                        
+                        authorizedMessages++;
+                        ESP_LOGI(TAG, "Processing authorized message from chat ID: %s", chatId.c_str());
+                        
+                        TelegramMessage msg;
+                        msg.chatId = new String(chatId);
+                        msg.text = new String(messageText);
+                        msg.fromName = new String(fromName);
+                        
+                        // Queue the message for processing
+                        if (xQueueSend(inst->telegramQueue, &msg, 0) != pdPASS) {
+                            ESP_LOGW(TAG, "Failed to queue Telegram message from %s", msg.fromName->c_str());
+                            // Free allocated memory to avoid leaks if the message could not be queued
+                            delete msg.chatId;
+                            delete msg.text;
+                            delete msg.fromName;
+                        } else {
+                            ESP_LOGI(TAG, "Successfully queued message for processing");
+                        }
+                    }
+                    
+                    if (authorizedMessages > 0) {
+                        ESP_LOGI(TAG, "Queued %d authorized messages for processing", authorizedMessages);
+                    } else {
+                        ESP_LOGI(TAG, "No authorized messages found");
+                    }
+                }
+                
+                // Add a small delay between successful polls to reduce load
+                vTaskDelay(pdMS_TO_TICKS(100));
+                
+            } catch (...) {
+                ESP_LOGE(TAG, "Exception caught in Telegram polling task");
+                // Add longer delay after exception to allow system to recover
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
+        } else {
+            ESP_LOGD(TAG, "WiFi not connected, skipping Telegram poll");
+        }
+        
+        // Wait for the next polling interval
+        vTaskDelay(pollInterval);
+    }
+    
+    ESP_LOGI(TAG, "Telegram polling task stopped");
+    vTaskDelete(nullptr);
 }
 
 void CommandHandler::processTelegramMessage(const TelegramMessage& msg)
@@ -657,7 +981,7 @@ void CommandHandler::processTelegramMessage(const TelegramMessage& msg)
         ESP_LOGE(TAG, "Failed to write command text to telegram pipe!");
         m_currentTelegramChatId = "";
         
-        // Create response with new strings
+        // Create response with new strings and queue it (non-blocking)
         TelegramResponse response;
         response.chatId = new String(*msg.chatId);
         response.message = new String("Error: Could not process your command (internal pipe error).");
@@ -679,7 +1003,7 @@ void CommandHandler::processTelegramMessage(const TelegramMessage& msg)
         ESP_LOGE(TAG, "Failed to write newline to telegram pipe!");
         m_currentTelegramChatId = "";
         
-        // Create response with new strings
+        // Create response with new strings and queue it (non-blocking)
         TelegramResponse response;
         response.chatId = new String(*msg.chatId);
         response.message = new String("Error: Could not process your command (internal pipe error).");
@@ -742,7 +1066,7 @@ void CommandHandler::processTelegramMessage(const TelegramMessage& msg)
     
     responseMessage.trim();
 
-    // Create response with new strings
+    // Create response with new strings and queue it (non-blocking)
     TelegramResponse response;
     response.chatId = new String(*msg.chatId);
     
@@ -754,7 +1078,7 @@ void CommandHandler::processTelegramMessage(const TelegramMessage& msg)
         response.message = new String("Command processed, no specific output or only markers received.");
     }
 
-    // Send to queue and immediately clear local copy
+    // Send to queue and immediately clear local copy (non-blocking)
     if (xQueueSend(responseQueue, &response, 0) == pdPASS) {
         ESP_LOGI(TAG, "Successfully queued response for chat ID: %s", msg.chatId->c_str());
         response.chatId = nullptr;
@@ -837,5 +1161,50 @@ static void sendSplitTelegramMessage(UniversalTelegramBot &bot, const String &ch
         }
         // Small delay to avoid hitting Telegram flood limits
         delay(20);
+    }
+}
+
+void CommandHandler::telegramSendTaskFunction(void* parameter)
+{
+    CommandHandler* inst = static_cast<CommandHandler*>(parameter);
+    TelegramResponse response;
+    
+    ESP_LOGI(TAG, "Telegram sending task started");
+    
+    while (true) {
+        // Wait for a response to send
+        if (xQueueReceive(inst->responseQueue, &response, portMAX_DELAY) == pdPASS) {
+            // Update watchdog timer
+            inst->lastSendTime = millis();
+            
+            ESP_LOGI(TAG, "Processing response for chat ID: %s", 
+                     response.chatId && !response.chatId->isEmpty() ? response.chatId->c_str() : "<empty>");
+            
+            if (inst->controller && response.chatId && response.message && 
+                !response.chatId->isEmpty() && !response.message->isEmpty()) {
+                
+                ESP_LOGI(TAG, "Sending Telegram message to %s: %s", 
+                         response.chatId->c_str(), response.message->c_str());
+                
+                // Add error handling for message sending
+                try {
+                    // Send the message in a non-blocking way
+                    UniversalTelegramBot &bot = inst->getControllerInstance()->getTelegramBot();
+                    sendSplitTelegramMessage(bot, *response.chatId, *response.message);
+                } catch (...) {
+                    ESP_LOGE(TAG, "Exception caught while sending Telegram message");
+                }
+                
+            } else {
+                ESP_LOGW(TAG, "Skipping empty message or chat ID");
+            }
+
+            // Clean up the response
+            delete response.chatId;
+            delete response.message;
+            response.chatId = nullptr;
+            response.message = nullptr;
+            ESP_LOGI(TAG, "Response processed and cleared");
+        }
     }
 }

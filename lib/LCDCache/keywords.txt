@@ -1,0 +1,22 @@
+# Syntax Coloring Map For LCDCache
+
+# Datatypes (KEYWORD1)
+LCDCache	KEYWORD1
+ColorValue	KEYWORD1
+ColorID	KEYWORD1
+
+# Methods and Functions (KEYWORD2)
+lock	KEYWORD2
+unlock	KEYWORD2
+isLocked	KEYWORD2
+clear	KEYWORD2
+setPixel	KEYWORD2
+getPixel	KEYWORD2
+setBackgroundColor	KEYWORD2
+getWidth	KEYWORD2
+getHeight	KEYWORD2
+isRowDirty	KEYWORD2
+markRowClean	KEYWORD2
+clearDirtyFlags	KEYWORD2
+
+# Constants (LITERAL1) 

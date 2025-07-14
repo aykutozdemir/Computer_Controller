@@ -67,6 +67,46 @@ public:
      */
     bool isNewButtonCode() const { return newCodeAvailable; }
 
+    /**
+     * @brief Get current signal strength counter.
+     * 
+     * @return Current signal strength value (0 to RF_MIN_SIGNAL_STRENGTH).
+     */
+    uint16_t getSignalStrength() const { return signalStrength; }
+
+    /**
+     * @brief Check if the last signal was validated.
+     * 
+     * @return true if the last signal passed validation, false otherwise.
+     */
+    bool isSignalValidated() const { return signalValidated; }
+
+    /**
+     * @brief Get signal quality statistics.
+     * 
+     * @param totalSignals Reference to store total signals received.
+     * @param validSignals Reference to store valid signals count.
+     * @param noiseSignals Reference to store noise signals count.
+     */
+    void getSignalStats(uint32_t& totalSignals, uint32_t& validSignals, uint32_t& noiseSignals) const;
+
+    /**
+     * @brief Reset signal statistics and validation state.
+     */
+    void resetSignalStats();
+
+    /**
+     * @brief Enable or disable fallback mode for better signal reception.
+     * @param enabled True to enable fallback mode, false to disable.
+     */
+    void setFallbackMode(bool enabled);
+
+    /**
+     * @brief Check if fallback mode is currently enabled.
+     * @return true if fallback mode is enabled, false otherwise.
+     */
+    bool isFallbackModeEnabled() const { return fallbackMode; }
+
 private:
     uint8_t interruptPin;    ///< GPIO pin number for the RF receiver data output
     RCSwitch rcSwitch;       ///< Instance of the RCSwitch library
@@ -77,4 +117,20 @@ private:
     // Basic debounce so that the same code is not reported more than once
     // within RF_REPEAT_DELAY milliseconds
     unsigned long lastReportTime = 0;  ///< Timestamp of the last reported code
+    
+    // Signal validation and noise filtering
+    uint32_t signalValidationBuffer[RF_SIGNAL_VALIDATION_COUNT];  ///< Buffer for signal validation
+    uint8_t signalValidationIndex = 0;  ///< Current index in validation buffer
+    unsigned long lastSignalTime = 0;    ///< Timestamp of last signal
+    uint16_t signalStrength = 0;         ///< Current signal strength counter
+    bool signalValidated = false;        ///< Flag indicating if signal passed validation
+    
+    // Signal statistics for monitoring
+    uint32_t totalSignalsReceived = 0;   ///< Total signals received
+    uint32_t validSignalsCount = 0;      ///< Count of valid signals
+    uint32_t noiseSignalsCount = 0;      ///< Count of noise signals
+    
+    // Fallback mode for poor signal conditions
+    bool fallbackMode = false;           ///< Flag to enable more lenient signal processing
+    unsigned long lastValidSignalTime = 0; ///< Timestamp of last valid signal
 }; 

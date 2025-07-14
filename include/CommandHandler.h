@@ -218,13 +218,29 @@ private:
 
     // Task handle for Telegram processing
     TaskHandle_t telegramTaskHandle;
+    // Task handle for Telegram polling (non-blocking)
+    TaskHandle_t telegramPollTaskHandle;
+    // Task handle for Telegram sending (non-blocking)
+    TaskHandle_t telegramSendTaskHandle;
     // Queue for Telegram messages
     QueueHandle_t telegramQueue;
     // Queue for Telegram responses
     QueueHandle_t responseQueue;
+    // Queue for Telegram API polling requests
+    QueueHandle_t telegramPollQueue;
+    // Flag to control polling task
+    volatile bool telegramPollingEnabled;
+    // Watchdog timers for task health monitoring
+    unsigned long lastPollTime;
+    unsigned long lastSendTime;
+    unsigned long lastProcessTime;
     
     // Task function for processing Telegram messages
     static void telegramTaskFunction(void* parameter);
+    // Task function for non-blocking Telegram polling
+    static void telegramPollTaskFunction(void* parameter);
+    // Task function for non-blocking Telegram sending
+    static void telegramSendTaskFunction(void* parameter);
 
     /**
      * @brief Handles incoming serial commands.

@@ -19,22 +19,19 @@ void ButtonController::loop() {
     if (button.getState() == LOW) { // Button is pressed
         if (pressStartTime == 0) { // Just pressed
             pressStartTime = millis();
-            buzzer.beep(BUTTON_PRESS_BEEP_DURATION_MS);
+            // Only beep if buzzer is enabled in settings
+            if (PersistentSettings::getInstance().isBuzzerEnabled()) {
+                buzzer.beep(BUTTON_PRESS_BEEP_DURATION_MS);
+            }
             beepTimer.reset();
-            currentState = State::SHORT_PRESS;
         } else { // Still pressed
             unsigned long duration = millis() - pressStartTime;
-            
-            // Update state based on duration
-            if (duration >= VERY_LONG_PRESS_DURATION) {
-                currentState = State::VERY_LONG_PRESS;
-            } else if (duration >= LONG_PRESS_DURATION) {
-                currentState = State::LONG_PRESS;
-            }
 
-            // Periodic beep
+            // Periodic beep - only if buzzer is enabled in settings
             if (beepTimer.isReady()) {
-                buzzer.beep(BUTTON_PRESS_BEEP_DURATION_MS);
+                if (PersistentSettings::getInstance().isBuzzerEnabled()) {
+                    buzzer.beep(BUTTON_PRESS_BEEP_DURATION_MS);
+                }
                 beepTimer.reset();
             }
         }

@@ -49,10 +49,15 @@ void FanController::updateRPM() {
         _lastPulseCount = _pulseCount;
         
         // Calculate RPM: (pulses * 60 * 1000) / (pulses_per_rev * interval_ms)
-        _currentRPM = (pulseDiff * 60 * 1000) / (_pulsesPerRevolution * _rpmUpdateInterval);
-        _lastRPMUpdate = currentTime;
+        uint16_t newRPM = (pulseDiff * 60 * 1000) / (_pulsesPerRevolution * _rpmUpdateInterval);
         
-        ESP_LOGD(TAG_FAN_CTRL, "Fan RPM: %u", _currentRPM);
+        // Only print debug if RPM has changed
+        if (newRPM != _currentRPM) {
+            ESP_LOGD(TAG_FAN_CTRL, "Fan RPM: %u", newRPM);
+        }
+        
+        _currentRPM = newRPM;
+        _lastRPMUpdate = currentTime;
     }
 }
 
